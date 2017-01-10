@@ -113,7 +113,7 @@ func canonicalMethod(f *File, id *ast.Ident, t *ast.FuncType) {
 		actual = strings.TrimPrefix(actual, "func")
 		actual = id.Name + actual
 
-		f.Badf(id.Pos(), "method %s should have signature %s", actual, expectFmt)
+		f.Badf("methods", id.Pos(), "method %s should have signature %s", actual, expectFmt)
 	}
 }
 

@@ -168,7 +168,7 @@ Files:
 			if fn != nil && fn.vars["ret"] != nil && !haveRetArg && len(retLine) > 0 {
 				v := fn.vars["ret"]
 				for _, line := range retLine {
-					f.Badf(token.NoPos, "%s:%d: [%s] %s: RET without writing to %d-byte ret+%d(FP)", f.name, line, arch, fnName, v.size, v.off)
+					f.Badf("asmdecl", token.NoPos, "%s:%d: [%s] %s: RET without writing to %d-byte ret+%d(FP)", f.name, line, arch, fnName, v.size, v.off)
 				}
 			}
 			retLine = nil
@@ -177,7 +177,7 @@ Files:
 			lineno++
 
 			badf := func(format string, args ...interface{}) {
-				f.Badf(token.NoPos, "%s:%d: [%s] %s: %s", f.name, lineno, arch, fnName, fmt.Sprintf(format, args...))
+				f.Badf("asmdecl", token.NoPos, "%s:%d: [%s] %s: %s", f.name, lineno, arch, fnName, fmt.Sprintf(format, args...))
 			}
 
 			if arch == "" {
@@ -240,7 +240,7 @@ Files:
 					size, _ := strconv.Atoi(m[5])
 					flag := m[3]
 					if size != fn.size && (flag != "7" && !strings.Contains(flag, "NOSPLIT") || size != 0) {
-						badf("wrong argument size %d; expected $...-%d", size, fn.size)
+						badf("asmdecl", "wrong argument size %d; expected $...-%d", size, fn.size)
 					}
 				}
 				localSize, _ = strconv.Atoi(m[4])
@@ -251,7 +251,7 @@ Files:
 				}
 				argSize, _ = strconv.Atoi(m[5])
 				if fn == nil && !strings.Contains(fnName, "<>") {
-					badf("function %s missing Go declaration", fnName)
+					badf("asmdecl", "function %s missing Go declaration", fnName)
 				}
 				wroteSP = false
 				haveRetArg = false
@@ -297,15 +297,15 @@ Files:
 					if fn != nil {
 						v := fn.varByOffset[off-localSize]
 						if v != nil {
-							badf("%s should be %s+%d(FP)", m[1], v.name, off-localSize)
+							badf("asmdecl", "%s should be %s+%d(FP)", m[1], v.name, off-localSize)
 							continue
 						}
 					}
 					if off >= localSize+argSize {
-						badf("use of %s points beyond argument frame", m[1])
+						badf("asmdecl", "use of %s points beyond argument frame", m[1])
 						continue
 					}
-					badf("use of %s to access argument frame", m[1])
+					badf("asmdecl", "use of %s to access argument frame", m[1])
 				}
 			}
 
@@ -317,9 +317,9 @@ Files:
 				off, _ := strconv.Atoi(m[2])
 				v := fn.varByOffset[off]
 				if v != nil {
-					badf("use of unnamed argument %s; offset %d is %s+%d(FP)", m[1], off, v.name, v.off)
+					badf("asmdecl", "use of unnamed argument %s; offset %d is %s+%d(FP)", m[1], off, v.name, v.off)
 				} else {
-					badf("use of unnamed argument %s", m[1])
+					badf("asmdecl", "use of unnamed argument %s", m[1])
 				}
 			}
 
@@ -340,9 +340,9 @@ Files:
 					}
 					v = fn.varByOffset[off]
 					if v != nil {
-						badf("unknown variable %s; offset %d is %s+%d(FP)", name, off, v.name, v.off)
+						badf("asmdecl", "unknown variable %s; offset %d is %s+%d(FP)", name, off, v.name, v.off)
 					} else {
-						badf("unknown variable %s", name)
+						badf("asmdecl", "unknown variable %s", name)
 					}
 					continue
 				}
@@ -557,7 +557,7 @@ func asmCheckVar(badf func(string, ...interface{}), fn *asmFunc, line, expr stri
 	m := asmOpcode.FindStringSubmatch(line)
 	if m == nil {
 		if !strings.HasPrefix(strings.TrimSpace(line), "//") {
-			badf("cannot find assembly opcode")
+			badf("asmdecl", "cannot find assembly opcode")
 		}
 		return
 	}
@@ -702,7 +702,7 @@ func asmCheckVar(badf func(string, ...interface{}), fn *asmFunc, line, expr stri
 			}
 			fmt.Fprintf(&inner, "%s+%d(FP)", vi.name, vi.off)
 		}
-		badf("invalid offset %s; expected %s+%d(FP)%s", expr, v.name, v.off, inner.String())
+		badf("asmdecl", "invalid offset %s; expected %s+%d(FP)%s", expr, v.name, v.off, inner.String())
 		return
 	}
 	if kind != 0 && kind != vk {
@@ -720,6 +720,6 @@ func asmCheckVar(badf func(string, ...interface{}), fn *asmFunc, line, expr stri
 				fmt.Fprintf(&inner, "%s+%d(FP)", vi.name, vi.off)
 			}
 		}
-		badf("invalid %s of %s; %s is %d-byte value%s", op, expr, vt, vs, inner.String())
+		badf("asmdecl", "invalid %s of %s; %s is %d-byte value%s", op, expr, vt, vs, inner.String())
 	}
 }

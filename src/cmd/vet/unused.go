@@ -25,7 +25,7 @@ var unusedStringMethodsFlag = flag.String("unusedstringmethods",
 
 func init() {
 	register("unusedresult",
-		"check for unused result of calls to functions in -unusedfuncs list and methods in -unusedstringmethods list",
+		"check for unused result of certain calls to functions",
 		checkUnusedResult,
 		exprStmt)
 }
@@ -76,7 +76,7 @@ func checkUnusedResult(f *File, n ast.Node) {
 		sig := sel.Type().(*types.Signature)
 		if types.Identical(sig, sigNoArgsStringResult) {
 			if unusedStringMethods[obj.Name()] {
-				f.Badf(call.Lparen, "result of (%s).%s call not used",
+				f.Badf("unusedfuncs", call.Lparen, "result of (%s).%s call not used",
 					sig.Recv().Type(), obj.Name())
 			}
 		}
@@ -86,7 +86,7 @@ func checkUnusedResult(f *File, n ast.Node) {
 		if obj, ok := obj.(*types.Func); ok {
 			qname := obj.Pkg().Path() + "." + obj.Name()
 			if unusedFuncs[qname] {
-				f.Badf(call.Lparen, "result of %v call not used", qname)
+				f.Badf("unusedfuncs", call.Lparen, "result of %v call not used", qname)
 			}
 		}
 	}

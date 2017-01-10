@@ -173,7 +173,7 @@ func (d *deadState) findDead(stmt ast.Stmt) {
 		case *ast.EmptyStmt:
 			// do not warn about unreachable empty statements
 		default:
-			d.f.Bad(stmt.Pos(), "unreachable code")
+			d.f.Bad("unreachable", stmt.Pos(), "unreachable code")
 			d.reachable = true // silence error about next statement
 		}
 	}

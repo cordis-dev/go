@@ -57,7 +57,7 @@ func checkNilFuncComparison(f *File, node ast.Node) {
 		return
 	}
 
-	f.Badf(e.Pos(), "comparison of function %v %v nil is always %v", obj.Name(), e.Op, e.Op == token.NEQ)
+	f.Badf("nilfunc", e.Pos(), "comparison of function %v %v nil is always %v", obj.Name(), e.Op, e.Op == token.NEQ)
 }
 
 // isNil reports whether the provided expression is the built-in nil

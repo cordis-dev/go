@@ -80,7 +80,7 @@ func (op boolOp) checkRedundant(f *File, exprs []ast.Expr) {
 	for _, e := range exprs {
 		efmt := f.gofmt(e)
 		if seen[efmt] {
-			f.Badf(e.Pos(), "redundant %s: %s %s %s", op.name, efmt, op.tok, efmt)
+			f.Badf("bool", e.Pos(), "redundant %s: %s %s %s", op.name, efmt, op.tok, efmt)
 		} else {
 			seen[efmt] = true
 		}
@@ -127,7 +127,7 @@ func (op boolOp) checkSuspect(f *File, exprs []ast.Expr) {
 		if prev, found := seen[xfmt]; found {
 			// checkRedundant handles the case in which efmt == prev.
 			if efmt != prev {
-				f.Badf(e.Pos(), "suspect %s: %s %s %s", op.name, efmt, op.tok, prev)
+				f.Badf("bool", e.Pos(), "suspect %s: %s %s %s", op.name, efmt, op.tok, prev)
 			}
 		} else {
 			seen[xfmt] = efmt

@@ -40,13 +40,13 @@ func checkCanonicalFieldTag(f *File, field *ast.Field, seen *map[[2]string]token
 
 	tag, err := strconv.Unquote(field.Tag.Value)
 	if err != nil {
-		f.Badf(field.Pos(), "unable to read struct tag %s", field.Tag.Value)
+		f.Badf("structtags", field.Pos(), "unable to read struct tag %s", field.Tag.Value)
 		return
 	}
 
 	if err := validateStructTag(tag); err != nil {
 		raw, _ := strconv.Unquote(field.Tag.Value) // field.Tag.Value is known to be a quoted string
-		f.Badf(field.Pos(), "struct field tag %#q not compatible with reflect.StructTag.Get: %s", raw, err)
+		f.Badf("structtags", field.Pos(), "struct field tag %#q not compatible with reflect.StructTag.Get: %s", raw, err)
 	}
 
 	for _, key := range checkTagDups {
@@ -84,7 +84,7 @@ func checkCanonicalFieldTag(f *File, field *ast.Field, seen *map[[2]string]token
 			} else {
 				name = field.Type.(*ast.Ident).Name
 			}
-			f.Badf(field.Pos(), "struct field %s repeats %s tag %q also at %s", name, key, val, f.loc(pos))
+			f.Badf("structtags", field.Pos(), "struct field %s repeats %s tag %q also at %s", name, key, val, f.loc(pos))
 		} else {
 			(*seen)[[2]string{key, val}] = field.Pos()
 		}
@@ -104,7 +104,7 @@ func checkCanonicalFieldTag(f *File, field *ast.Field, seen *map[[2]string]token
 
 	for _, enc := range [...]string{"json", "xml"} {
 		if reflect.StructTag(tag).Get(enc) != "" {
-			f.Badf(field.Pos(), "struct field %s has %s tag but is not exported", field.Names[0].Name, enc)
+			f.Badf("structtags", field.Pos(), "struct field %s has %s tag but is not exported", field.Names[0].Name, enc)
 			return
 		}
 	}

@@ -83,6 +83,6 @@ func checkLongShift(f *File, node ast.Node, x, y ast.Expr) {
 	}
 	if amt >= size {
 		ident := f.gofmt(x)
-		f.Badf(node.Pos(), "%s %stoo small for shift of %d", ident, msg, amt)
+		f.Badf("shift", node.Pos(), "%s %stoo small for shift of %d", ident, msg, amt)
 	}
 }

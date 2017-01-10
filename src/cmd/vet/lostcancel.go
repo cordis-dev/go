@@ -75,7 +75,7 @@ func checkLostCancel(f *File, node ast.Node) {
 			}
 			if id != nil {
 				if id.Name == "_" {
-					f.Badf(id.Pos(), "the cancel function returned by context.%s should be called, not discarded, to avoid a context leak",
+					f.Badf("lostcancel", id.Pos(), "the cancel function returned by context.%s should be called, not discarded, to avoid a context leak",
 						n.(*ast.SelectorExpr).Sel.Name)
 				} else if v, ok := f.pkg.uses[id].(*types.Var); ok {
 					cancelvars[v] = stmt
@@ -122,8 +122,8 @@ func checkLostCancel(f *File, node ast.Node) {
 	for v, stmt := range cancelvars {
 		if ret := lostCancelPath(f, g, v, stmt, sig); ret != nil {
 			lineno := f.fset.Position(stmt.Pos()).Line
-			f.Badf(stmt.Pos(), "the %s function is not used on all paths (possible context leak)", v.Name())
-			f.Badf(ret.Pos(), "this return statement may be reached without using the %s var defined on line %d", v.Name(), lineno)
+			f.Badf("lostcancel", stmt.Pos(), "the %s function is not used on all paths (possible context leak)", v.Name())
+			f.Badf("lostcancel", ret.Pos(), "this return statement may be reached without using the %s var defined on line %d", v.Name(), lineno)
 		}
 	}
 }

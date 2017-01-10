@@ -25,7 +25,7 @@ func checkUnsafePointer(f *File, node ast.Node) {
 		return
 	}
 	if f.hasBasicType(x.Fun, types.UnsafePointer) && f.hasBasicType(x.Args[0], types.Uintptr) && !f.isSafeUintptr(x.Args[0]) {
-		f.Badf(x.Pos(), "possible misuse of unsafe.Pointer")
+		f.Badf("unsafeptr", x.Pos(), "possible misuse of unsafe.Pointer")
 	}
 }
 

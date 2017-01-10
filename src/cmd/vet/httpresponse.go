@@ -66,7 +66,7 @@ func checkHTTPResponse(f *File, node ast.Node) {
 	}
 
 	if resp.Obj == root.Obj {
-		f.Badf(root.Pos(), "using %s before checking for errors", resp.Name)
+		f.Badf("httpresponse", root.Pos(), "using %s before checking for errors", resp.Name)
 	}
 }
 

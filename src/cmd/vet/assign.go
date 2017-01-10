@@ -43,7 +43,7 @@ func checkAssignStmt(f *File, node ast.Node) {
 		le := f.gofmt(lhs)
 		re := f.gofmt(rhs)
 		if le == re {
-			f.Badf(stmt.Pos(), "self-assignment of %s to %s", re, le)
+			f.Badf("assign", stmt.Pos(), "self-assignment of %s to %s", re, le)
 		}
 	}
 }

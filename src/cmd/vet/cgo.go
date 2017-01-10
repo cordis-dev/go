@@ -45,7 +45,7 @@ func checkCgoCall(f *File, node ast.Node) {
 
 	for _, arg := range x.Args {
 		if !typeOKForCgoCall(cgoBaseType(f, arg), make(map[types.Type]bool)) {
-			f.Badf(arg.Pos(), "possibly passing Go type with embedded pointer to C")
+			f.Badf("cgocall", arg.Pos(), "possibly passing Go type with embedded pointer to C")
 		}
 
 		// Check for passing the address of a bad type.
@@ -54,7 +54,7 @@ func checkCgoCall(f *File, node ast.Node) {
 		}
 		if u, ok := arg.(*ast.UnaryExpr); ok && u.Op == token.AND {
 			if !typeOKForCgoCall(cgoBaseType(f, u.X), make(map[types.Type]bool)) {
-				f.Badf(arg.Pos(), "possibly passing Go type with embedded pointer to C")
+				f.Badf("cgocall", arg.Pos(), "possibly passing Go type with embedded pointer to C")
 			}
 		}
 	}

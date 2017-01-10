@@ -41,7 +41,7 @@ var strictShadowing = flag.Bool("shadowstrict", false, "whether to be strict abo
 
 func init() {
 	register("shadow",
-		"check for shadowed variables (experimental; must be set explicitly)",
+		"check for shadowed variables",
 		checkShadow,
 		assignStmt, genDecl)
 	experimental["shadow"] = true
@@ -119,7 +119,7 @@ func checkShadowAssignment(f *File, a *ast.AssignStmt) {
 	for _, expr := range a.Lhs {
 		ident, ok := expr.(*ast.Ident)
 		if !ok {
-			f.Badf(expr.Pos(), "invalid AST: short variable declaration of non-identifier")
+			f.Badf("shadow", expr.Pos(), "invalid AST: short variable declaration of non-identifier")
 			return
 		}
 		checkShadowing(f, ident)
@@ -141,7 +141,7 @@ func (f *File) idiomaticShortRedecl(a *ast.AssignStmt) bool {
 	for i, expr := range a.Lhs {
 		lhs, ok := expr.(*ast.Ident)
 		if !ok {
-			f.Badf(expr.Pos(), "invalid AST: short variable declaration of non-identifier")
+			f.Badf("shadow", expr.Pos(), "invalid AST: short variable declaration of non-identifier")
 			return true // Don't do any more processing.
 		}
 		switch rhs := a.Rhs[i].(type) {
@@ -188,7 +188,7 @@ func checkShadowDecl(f *File, d *ast.GenDecl) {
 	for _, spec := range d.Specs {
 		valueSpec, ok := spec.(*ast.ValueSpec)
 		if !ok {
-			f.Badf(spec.Pos(), "invalid AST: var GenDecl not ValueSpec")
+			f.Badf("shadow", spec.Pos(), "invalid AST: var GenDecl not ValueSpec")
 			return
 		}
 		// Don't complain about deliberate redeclarations of the form
@@ -232,7 +232,7 @@ func checkShadowing(f *File, ident *ast.Ident) {
 		// the shadowing identifier.
 		span, ok := f.pkg.spans[shadowed]
 		if !ok {
-			f.Badf(ident.Pos(), "internal error: no range for %q", ident.Name)
+			f.Badf("shadow", ident.Pos(), "internal error: no range for %q", ident.Name)
 			return
 		}
 		if !span.contains(ident.Pos()) {
@@ -241,6 +241,6 @@ func checkShadowing(f *File, ident *ast.Ident) {
 	}
 	// Don't complain if the types differ: that implies the programmer really wants two different things.
 	if types.Identical(obj.Type(), shadowed.Type()) {
-		f.Badf(ident.Pos(), "declaration of %q shadows declaration at %s", obj.Name(), f.loc(shadowed.Pos()))
+		f.Badf("shadow", ident.Pos(), "declaration of %q shadows declaration at %s", obj.Name(), f.loc(shadowed.Pos()))
 	}
 }

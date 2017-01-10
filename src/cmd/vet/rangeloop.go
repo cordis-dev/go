@@ -67,7 +67,7 @@ func checkRangeLoop(f *File, node ast.Node) {
 			return true
 		}
 		if key != nil && id.Obj == key.Obj || val != nil && id.Obj == val.Obj {
-			f.Bad(id.Pos(), "range variable", id.Name, "captured by func literal")
+			f.Bad("rangeloops", id.Pos(), "range variable", id.Name, "captured by func literal")
 		}
 		return true
 	})

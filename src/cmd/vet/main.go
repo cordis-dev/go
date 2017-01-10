@@ -145,10 +145,14 @@ var (
 	// The outer level is keyed by a nil pointer, one of the AST vars above.
 	// The inner level is keyed by checker name.
 	checkers = make(map[ast.Node]map[string]func(*File, ast.Node))
+	
+	// for more meta-data
+	namesWithUsages = make(map[string]string)
 )
 
 func register(name, usage string, fn func(*File, ast.Node), types ...ast.Node) {
 	report[name] = triStateFlag(name, unset, usage)
+	namesWithUsages[name] = usage;
 	for _, typ := range types {
 		m := checkers[typ]
 		if m == nil {
@@ -420,15 +424,23 @@ func Printf(format string, args ...interface{}) {
 }
 
 // Bad reports an error and sets the exit code..
-func (f *File) Bad(pos token.Pos, args ...interface{}) {
-	f.Warn(pos, args...)
+func (f *File) Bad(name string, pos token.Pos, args ...interface{}) {
+	f.WarnV2(name, pos, args...)
 	setExit(1)
 }
 
 // Badf reports a formatted error and sets the exit code.
-func (f *File) Badf(pos token.Pos, format string, args ...interface{}) {
-	f.Warnf(pos, format, args...)
+func (f *File) Badf(name string, pos token.Pos, format string, args ...interface{}) {
+	f.WarnfV2(name, pos, format, args...)
 	setExit(1)
+}
+
+func (f *File) WarnfV2(name string, pos token.Pos, format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "%s:%s:%s: %s\n", f.loc(pos), name, namesWithUsages[name], fmt.Sprintf(format, args...))
+}
+
+func (f *File) WarnV2(name string, pos token.Pos, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "%s:%s:%s: %s", f.loc(pos), name, namesWithUsages[name], fmt.Sprintln(args...))
 }
 
 // loc returns a formatted representation of the position.

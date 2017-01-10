@@ -64,6 +64,6 @@ func (f *File) checkAtomicAddAssignment(left ast.Expr, call *ast.CallExpr) {
 	}
 
 	if broken {
-		f.Bad(left.Pos(), "direct assignment to atomic value")
+		f.Bad("atomic", left.Pos(), "direct assignment to atomic value")
 	}
 }

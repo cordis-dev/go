@@ -177,13 +177,11 @@ var optab = []Optab{
 	Optab{ACSG, C_REG, C_REG, C_NONE, C_SOREG, 79, 0},
 
 	// floating point
-	Optab{AFADD, C_FREG, C_NONE, C_NONE, C_FREG, 2, 0},
-	Optab{AFADD, C_FREG, C_FREG, C_NONE, C_FREG, 2, 0},
+	Optab{AFADD, C_FREG, C_NONE, C_NONE, C_FREG, 32, 0},
 	Optab{AFABS, C_FREG, C_NONE, C_NONE, C_FREG, 33, 0},
 	Optab{AFABS, C_NONE, C_NONE, C_NONE, C_FREG, 33, 0},
-	Optab{AFMADD, C_FREG, C_FREG, C_FREG, C_FREG, 34, 0},
+	Optab{AFMADD, C_FREG, C_FREG, C_NONE, C_FREG, 34, 0},
 	Optab{AFMUL, C_FREG, C_NONE, C_NONE, C_FREG, 32, 0},
-	Optab{AFMUL, C_FREG, C_FREG, C_NONE, C_FREG, 32, 0},
 	Optab{AFMOVD, C_LAUTO, C_NONE, C_NONE, C_FREG, 36, REGSP},
 	Optab{AFMOVD, C_LOREG, C_NONE, C_NONE, C_FREG, 36, 0},
 	Optab{AFMOVD, C_ADDR, C_NONE, C_NONE, C_FREG, 75, 0},
@@ -387,7 +385,7 @@ var oprange [ALAST & obj.AMask][]Optab
 
 var xcmp [C_NCLASS][C_NCLASS]bool
 
-func spanz(ctxt *obj.Link, cursym *obj.LSym) {
+func spanz(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 	p := cursym.Text
 	if p == nil || p.Link == nil { // handle external functions and ELF section symbols
 		return
@@ -396,7 +394,7 @@ func spanz(ctxt *obj.Link, cursym *obj.LSym) {
 	ctxt.Autosize = int32(p.To.Offset)
 
 	if oprange[AORW&obj.AMask] == nil {
-		buildop(ctxt)
+		ctxt.Diag("s390x ops not initialized, call s390x.buildop first")
 	}
 
 	buffer := make([]byte, 0)
@@ -417,8 +415,7 @@ func spanz(ctxt *obj.Link, cursym *obj.LSym) {
 			}
 			p.Pc = pc
 			ctxt.Pc = p.Pc
-			ctxt.Curp = p
-			asmout(ctxt, &buffer)
+			asmout(ctxt, p, &buffer)
 			if pc == int64(len(buffer)) {
 				switch p.As {
 				case obj.ANOP, obj.AFUNCDATA, obj.APCDATA, obj.ATEXT:
@@ -775,6 +772,13 @@ func opset(a, b obj.As) {
 }
 
 func buildop(ctxt *obj.Link) {
+	if oprange[AORW&obj.AMask] != nil {
+		// Already initialized; stop now.
+		// This happens in the cmd/asm tests,
+		// each of which re-initializes the arch.
+		return
+	}
+
 	for i := 0; i < C_NCLASS; i++ {
 		for n := 0; n < C_NCLASS; n++ {
 			if cmp(n, i) {
@@ -872,10 +876,6 @@ func buildop(ctxt *obj.Link) {
 			opset(AFMADDS, r)
 			opset(AFMSUB, r)
 			opset(AFMSUBS, r)
-			opset(AFNMADD, r)
-			opset(AFNMADDS, r)
-			opset(AFNMSUB, r)
-			opset(AFNMSUBS, r)
 		case AFMUL:
 			opset(AFMULS, r)
 		case AFCMPO:
@@ -2555,8 +2555,7 @@ func branchMask(ctxt *obj.Link, p *obj.Prog) uint32 {
 	return 0xF
 }
 
-func asmout(ctxt *obj.Link, asm *[]byte) {
-	p := ctxt.Curp
+func asmout(ctxt *obj.Link, p *obj.Prog, asm *[]byte) {
 	o := oplook(ctxt, p)
 	ctxt.Printp = p
 
@@ -2628,18 +2627,6 @@ func asmout(ctxt *obj.Link, asm *[]byte) {
 			opcode = op_DSGR
 		case ADIVDU, AMODDU:
 			opcode = op_DLGR
-		case AFADD:
-			opcode = op_ADBR
-		case AFADDS:
-			opcode = op_AEBR
-		case AFSUB:
-			opcode = op_SDBR
-		case AFSUBS:
-			opcode = op_SEBR
-		case AFDIV:
-			opcode = op_DDBR
-		case AFDIVS:
-			opcode = op_DEBR
 		}
 
 		switch p.As {
@@ -2677,29 +2664,6 @@ func asmout(ctxt *obj.Link, asm *[]byte) {
 			zRRE(op_LGR, REGTMP2, uint32(r), asm)
 			zRRE(opcode, REGTMP, uint32(p.From.Reg), asm)
 			zRRE(op_LGR, uint32(p.To.Reg), REGTMP, asm)
-
-		case AFADD, AFADDS:
-			if r == p.To.Reg {
-				zRRE(opcode, uint32(p.To.Reg), uint32(p.From.Reg), asm)
-			} else if p.From.Reg == p.To.Reg {
-				zRRE(opcode, uint32(p.To.Reg), uint32(r), asm)
-			} else {
-				zRR(op_LDR, uint32(p.To.Reg), uint32(r), asm)
-				zRRE(opcode, uint32(p.To.Reg), uint32(p.From.Reg), asm)
-			}
-
-		case AFSUB, AFSUBS, AFDIV, AFDIVS:
-			if r == p.To.Reg {
-				zRRE(opcode, uint32(p.To.Reg), uint32(p.From.Reg), asm)
-			} else if p.From.Reg == p.To.Reg {
-				zRRE(op_LGDR, REGTMP, uint32(r), asm)
-				zRRE(opcode, uint32(r), uint32(p.From.Reg), asm)
-				zRR(op_LDR, uint32(p.To.Reg), uint32(r), asm)
-				zRRE(op_LDGR, uint32(r), REGTMP, asm)
-			} else {
-				zRR(op_LDR, uint32(p.To.Reg), uint32(r), asm)
-				zRRE(opcode, uint32(p.To.Reg), uint32(p.From.Reg), asm)
-			}
 
 		}
 
@@ -3146,31 +3110,29 @@ func asmout(ctxt *obj.Link, asm *[]byte) {
 			uint8(wd>>8),
 			uint8(wd))
 
-	case 32: // fmul freg [freg] freg
-		r := int(p.Reg)
-		if r == 0 {
-			r = int(p.To.Reg)
-		}
-
+	case 32: // float op freg freg
 		var opcode uint32
-
 		switch p.As {
 		default:
 			ctxt.Diag("invalid opcode")
+		case AFADD:
+			opcode = op_ADBR
+		case AFADDS:
+			opcode = op_AEBR
+		case AFDIV:
+			opcode = op_DDBR
+		case AFDIVS:
+			opcode = op_DEBR
 		case AFMUL:
 			opcode = op_MDBR
 		case AFMULS:
 			opcode = op_MEEBR
+		case AFSUB:
+			opcode = op_SDBR
+		case AFSUBS:
+			opcode = op_SEBR
 		}
-
-		if r == int(p.To.Reg) {
-			zRRE(opcode, uint32(p.To.Reg), uint32(p.From.Reg), asm)
-		} else if p.From.Reg == p.To.Reg {
-			zRRE(opcode, uint32(p.To.Reg), uint32(r), asm)
-		} else {
-			zRR(op_LDR, uint32(p.To.Reg), uint32(r), asm)
-			zRRE(opcode, uint32(p.To.Reg), uint32(p.From.Reg), asm)
-		}
+		zRRE(opcode, uint32(p.To.Reg), uint32(p.From.Reg), asm)
 
 	case 33: // float op [freg] freg
 		r := p.From.Reg
@@ -3199,9 +3161,8 @@ func asmout(ctxt *obj.Link, asm *[]byte) {
 		}
 		zRRE(opcode, uint32(p.To.Reg), uint32(r), asm)
 
-	case 34: // float multiply-add freg freg freg freg
+	case 34: // float multiply-add freg freg freg
 		var opcode uint32
-
 		switch p.As {
 		default:
 			ctxt.Diag("invalid opcode")
@@ -3213,22 +3174,8 @@ func asmout(ctxt *obj.Link, asm *[]byte) {
 			opcode = op_MSDBR
 		case AFMSUBS:
 			opcode = op_MSEBR
-		case AFNMADD:
-			opcode = op_MADBR
-		case AFNMADDS:
-			opcode = op_MAEBR
-		case AFNMSUB:
-			opcode = op_MSDBR
-		case AFNMSUBS:
-			opcode = op_MSEBR
 		}
-
-		zRR(op_LDR, uint32(p.To.Reg), uint32(p.Reg), asm)
-		zRRD(opcode, uint32(p.To.Reg), uint32(p.From.Reg), uint32(p.From3.Reg), asm)
-
-		if p.As == AFNMADD || p.As == AFNMADDS || p.As == AFNMSUB || p.As == AFNMSUBS {
-			zRRE(op_LCDFR, uint32(p.To.Reg), uint32(p.To.Reg), asm)
-		}
+		zRRD(opcode, uint32(p.To.Reg), uint32(p.From.Reg), uint32(p.Reg), asm)
 
 	case 35: // mov reg mem (no relocation)
 		d2 := regoff(ctxt, &p.To)
@@ -4014,7 +3961,7 @@ func asmout(ctxt *obj.Link, asm *[]byte) {
 		zVRS(op, uint32(p.To.Reg), uint32(p.From3.Reg), uint32(reg), offset, 0, asm)
 
 	case 109: // VRI-a
-		op, _, _ := vop(p.As)
+		op, m3, _ := vop(p.As)
 		i2 := uint32(vregoff(ctxt, &p.From))
 		switch p.As {
 		case AVZERO:
@@ -4022,7 +3969,6 @@ func asmout(ctxt *obj.Link, asm *[]byte) {
 		case AVONE:
 			i2 = 0xffff
 		}
-		m3 := uint32(0)
 		if p.From3 != nil {
 			m3 = uint32(vregoff(ctxt, p.From3))
 		}

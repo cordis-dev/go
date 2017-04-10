@@ -30,9 +30,9 @@ const ptrSize = 4 << (^uintptr(0) >> 63) // unsafe.Sizeof(uintptr(0)) but an ide
 // the underlying Go value can be used concurrently for the equivalent
 // direct operations.
 //
-// Using == on two Values does not compare the underlying values
-// they represent, but rather the contents of the Value structs.
 // To compare two Values, compare the results of the Interface method.
+// Using == on two Values does not compare the underlying values
+// they represent.
 type Value struct {
 	// typ holds the type of the value represented by a Value.
 	typ *rtype
@@ -538,6 +538,11 @@ func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer) {
 			off += typ.size
 		}
 	}
+
+	// runtime.getArgInfo expects to be able to find ctxt on the
+	// stack when it finds our caller, makeFuncStub. Make sure it
+	// doesn't get garbage collected.
+	runtime.KeepAlive(ctxt)
 }
 
 // methodReceiver returns information about the receiver
@@ -625,8 +630,11 @@ func callMethod(ctxt *methodValue, frame unsafe.Pointer) {
 	args := framePool.Get().(unsafe.Pointer)
 
 	// Copy in receiver and rest of args.
+	// Avoid constructing out-of-bounds pointers if there are no args.
 	storeRcvr(rcvr, args)
-	typedmemmovepartial(frametype, unsafe.Pointer(uintptr(args)+ptrSize), frame, ptrSize, argSize-ptrSize)
+	if argSize-ptrSize > 0 {
+		typedmemmovepartial(frametype, unsafe.Pointer(uintptr(args)+ptrSize), frame, ptrSize, argSize-ptrSize)
+	}
 
 	// Call.
 	call(frametype, fn, args, uint32(frametype.size), uint32(retOffset))
@@ -636,20 +644,26 @@ func callMethod(ctxt *methodValue, frame unsafe.Pointer) {
 	// a receiver) is different from the layout of the fn call, which has
 	// a receiver.
 	// Ignore any changes to args and just copy return values.
-	callerRetOffset := retOffset - ptrSize
-	if runtime.GOARCH == "amd64p32" {
-		callerRetOffset = align(argSize-ptrSize, 8)
+	// Avoid constructing out-of-bounds pointers if there are no return values.
+	if frametype.size-retOffset > 0 {
+		callerRetOffset := retOffset - ptrSize
+		if runtime.GOARCH == "amd64p32" {
+			callerRetOffset = align(argSize-ptrSize, 8)
+		}
+		typedmemmovepartial(frametype,
+			unsafe.Pointer(uintptr(frame)+callerRetOffset),
+			unsafe.Pointer(uintptr(args)+retOffset),
+			retOffset,
+			frametype.size-retOffset)
 	}
-	typedmemmovepartial(frametype,
-		unsafe.Pointer(uintptr(frame)+callerRetOffset),
-		unsafe.Pointer(uintptr(args)+retOffset),
-		retOffset,
-		frametype.size-retOffset)
 
 	// This is untyped because the frame is really a stack, even
 	// though it's a heap object.
 	memclrNoHeapPointers(args, frametype.size)
 	framePool.Put(args)
+
+	// See the comment in callReflect.
+	runtime.KeepAlive(ctxt)
 }
 
 // funcName returns the name of f, for use in error messages.
@@ -755,7 +769,7 @@ func (v Value) Field(i int) Value {
 	fl := v.flag&(flagStickyRO|flagIndir|flagAddr) | flag(typ.Kind())
 	// Using an unexported field forces flagRO.
 	if !field.name.isExported() {
-		if field.name.name() == "" {
+		if field.anon() {
 			fl |= flagEmbedRO
 		} else {
 			fl |= flagStickyRO
@@ -766,7 +780,7 @@ func (v Value) Field(i int) Value {
 	// In the former case, we want v.ptr + offset.
 	// In the latter case, we must have field.offset = 0,
 	// so v.ptr + field.offset is still okay.
-	ptr := unsafe.Pointer(uintptr(v.ptr) + field.offset)
+	ptr := unsafe.Pointer(uintptr(v.ptr) + field.offset())
 	return Value{typ, ptr, fl}
 }
 
@@ -1290,7 +1304,7 @@ func (v Value) recv(nb bool) (val Value, ok bool) {
 	} else {
 		p = unsafe.Pointer(&val.ptr)
 	}
-	selected, ok := chanrecv(v.typ, v.pointer(), nb, p)
+	selected, ok := chanrecv(v.pointer(), nb, p)
 	if !selected {
 		val = Value{}
 	}
@@ -1321,7 +1335,7 @@ func (v Value) send(x Value, nb bool) (selected bool) {
 	} else {
 		p = unsafe.Pointer(&x.ptr)
 	}
-	return chansend(v.typ, v.pointer(), p, nb)
+	return chansend(v.pointer(), p, nb)
 }
 
 // Set assigns x to the value v.
@@ -2063,12 +2077,17 @@ func MakeChan(typ Type, buffer int) Value {
 	return Value{typ.common(), ch, flag(Chan)}
 }
 
-// MakeMap creates a new map of the specified type.
+// MakeMap creates a new map with the specified type.
 func MakeMap(typ Type) Value {
+	return MakeMapWithSize(typ, 0)
+}
+
+// MakeMapWithSize creates a new map with the specified type and initial capacity.
+func MakeMapWithSize(typ Type, cap int) Value {
 	if typ.Kind() != Map {
-		panic("reflect.MakeMap of non-map type")
+		panic("reflect.MakeMapWithSize of non-map type")
 	}
-	m := makemap(typ.(*rtype))
+	m := makemap(typ.(*rtype), cap)
 	return Value{typ.common(), m, flag(Map)}
 }
 
@@ -2457,13 +2476,13 @@ func chanlen(ch unsafe.Pointer) int
 // (due to the escapes() call in ValueOf).
 
 //go:noescape
-func chanrecv(t *rtype, ch unsafe.Pointer, nb bool, val unsafe.Pointer) (selected, received bool)
+func chanrecv(ch unsafe.Pointer, nb bool, val unsafe.Pointer) (selected, received bool)
 
 //go:noescape
-func chansend(t *rtype, ch unsafe.Pointer, val unsafe.Pointer, nb bool) bool
+func chansend(ch unsafe.Pointer, val unsafe.Pointer, nb bool) bool
 
 func makechan(typ *rtype, size uint64) (ch unsafe.Pointer)
-func makemap(t *rtype) (m unsafe.Pointer)
+func makemap(t *rtype, cap int) (m unsafe.Pointer)
 
 //go:noescape
 func mapaccess(t *rtype, m unsafe.Pointer, key unsafe.Pointer) (val unsafe.Pointer)

@@ -248,7 +248,7 @@ func (s *mspan) nextFreeIndex() uintptr {
 		return snelems
 	}
 
-	s.allocCache >>= (bitIndex + 1)
+	s.allocCache >>= uint(bitIndex + 1)
 	sfreeindex = result + 1
 
 	if sfreeindex%64 == 0 && sfreeindex != snelems {
@@ -330,11 +330,6 @@ func (m markBits) clearMarked() {
 	// We used to be clever here and use a non-atomic update in certain
 	// cases, but it's not worth the risk.
 	atomic.And8(m.bytep, ^m.mask)
-}
-
-// clearMarkedNonAtomic clears the marked bit non-atomically.
-func (m markBits) clearMarkedNonAtomic() {
-	*m.bytep ^= m.mask
 }
 
 // markBitsForSpan returns the markBits for the span base address base.
@@ -430,6 +425,7 @@ func heapBitsForObject(p, refBase, refOff uintptr) (base uintptr, hbits heapBits
 				print("runtime: found in object at *(", hex(refBase), "+", hex(refOff), ")\n")
 				gcDumpObject("object", refBase, refOff)
 			}
+			getg().m.traceback = 2
 			throw("found bad pointer in Go heap (incorrect use of unsafe or cgo?)")
 		}
 		return
@@ -578,29 +574,9 @@ func bulkBarrierPreWrite(dst, src, size uintptr) {
 		return
 	}
 	if !inheap(dst) {
-		// If dst is on the stack and in a higher frame than the
-		// caller, we either need to execute write barriers on
-		// it (which is what happens for normal stack writes
-		// through pointers to higher frames), or we need to
-		// force the mark termination stack scan to scan the
-		// frame containing dst.
-		//
-		// Executing write barriers on dst is complicated in the
-		// general case because we either need to unwind the
-		// stack to get the stack map, or we need the type's
-		// bitmap, which may be a GC program.
-		//
-		// Hence, we opt for forcing the re-scan to scan the
-		// frame containing dst, which we can do by simply
-		// unwinding the stack barriers between the current SP
-		// and dst's frame.
 		gp := getg().m.curg
 		if gp != nil && gp.stack.lo <= dst && dst < gp.stack.hi {
-			// Run on the system stack to give it more
-			// stack space.
-			systemstack(func() {
-				gcUnwindBarriers(gp, dst)
-			})
+			// Destination is our own stack. No need for barriers.
 			return
 		}
 
@@ -848,10 +824,10 @@ var oneBitCount = [256]uint8{
 	4, 5, 5, 6, 5, 6, 6, 7,
 	5, 6, 6, 7, 6, 7, 7, 8}
 
-// countFree runs through the mark bits in a span and counts the number of free objects
-// in the span.
+// countAlloc returns the number of objects allocated in span s by
+// scanning the allocation bitmap.
 // TODO:(rlh) Use popcount intrinsic.
-func (s *mspan) countFree() int {
+func (s *mspan) countAlloc() int {
 	count := 0
 	maxIndex := s.nelems / 8
 	for i := uintptr(0); i < maxIndex; i++ {
@@ -864,7 +840,7 @@ func (s *mspan) countFree() int {
 		bits := mrkBits & mask
 		count += int(oneBitCount[bits])
 	}
-	return int(s.nelems) - count
+	return count
 }
 
 // heapBitsSetType records that the new allocation [x, x+size)
@@ -1902,7 +1878,7 @@ func getgcmask(ep interface{}) (mask []byte) {
 		frame.sp = uintptr(p)
 		_g_ := getg()
 		gentraceback(_g_.m.curg.sched.pc, _g_.m.curg.sched.sp, 0, _g_.m.curg, 0, nil, 1000, getgcmaskcb, noescape(unsafe.Pointer(&frame)), 0)
-		if frame.fn != nil {
+		if frame.fn.valid() {
 			f := frame.fn
 			targetpc := frame.continpc
 			if targetpc == 0 {

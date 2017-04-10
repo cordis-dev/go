@@ -164,7 +164,7 @@ type Flusher interface {
 // should always test for this ability at runtime.
 type Hijacker interface {
 	// Hijack lets the caller take over the connection.
-	// After a call to Hijack(), the HTTP server library
+	// After a call to Hijack the HTTP server library
 	// will not do anything else with the connection.
 	//
 	// It becomes the caller's responsibility to manage
@@ -174,6 +174,9 @@ type Hijacker interface {
 	// already set, depending on the configuration of the
 	// Server. It is the caller's responsibility to set
 	// or clear those deadlines as needed.
+	//
+	// The returned bufio.Reader may contain unprocessed buffered
+	// data from the client.
 	Hijack() (net.Conn, *bufio.ReadWriter, error)
 }
 
@@ -293,6 +296,11 @@ func (c *conn) hijackLocked() (rwc net.Conn, buf *bufio.ReadWriter, err error) {
 	rwc.SetDeadline(time.Time{})
 
 	buf = bufio.NewReadWriter(c.bufr, bufio.NewWriter(rwc))
+	if c.r.hasByte {
+		if _, err := c.bufr.Peek(c.bufr.Buffered() + 1); err != nil {
+			return nil, nil, fmt.Errorf("unexpected Peek failure reading buffered byte: %v", err)
+		}
+	}
 	c.setState(rwc, StateHijacked)
 	return
 }
@@ -831,7 +839,7 @@ func (srv *Server) initialReadLimitSize() int64 {
 	return int64(srv.maxHeaderBytes()) + 4096 // bufio slop
 }
 
-// wrapper around io.ReaderCloser which on first read, sends an
+// wrapper around io.ReadCloser which on first read, sends an
 // HTTP/1.1 100 Continue header
 type expectContinueReader struct {
 	resp       *response
@@ -1965,8 +1973,12 @@ func StripPrefix(prefix string, h Handler) Handler {
 	}
 	return HandlerFunc(func(w ResponseWriter, r *Request) {
 		if p := strings.TrimPrefix(r.URL.Path, prefix); len(p) < len(r.URL.Path) {
-			r.URL.Path = p
-			h.ServeHTTP(w, r)
+			r2 := new(Request)
+			*r2 = *r
+			r2.URL = new(url.URL)
+			*r2.URL = *r.URL
+			r2.URL.Path = p
+			h.ServeHTTP(w, r2)
 		} else {
 			NotFound(w, r)
 		}
@@ -2155,9 +2167,29 @@ func cleanPath(p string) string {
 	return np
 }
 
-// Find a handler on a handler map given a path string
-// Most-specific (longest) pattern wins
+// stripHostPort returns h without any trailing ":<port>".
+func stripHostPort(h string) string {
+	// If no port on host, return unchanged
+	if strings.IndexByte(h, ':') == -1 {
+		return h
+	}
+	host, _, err := net.SplitHostPort(h)
+	if err != nil {
+		return h // on error, return unchanged
+	}
+	return host
+}
+
+// Find a handler on a handler map given a path string.
+// Most-specific (longest) pattern wins.
 func (mux *ServeMux) match(path string) (h Handler, pattern string) {
+	// Check for exact match first.
+	v, ok := mux.m[path]
+	if ok {
+		return v.h, v.pattern
+	}
+
+	// Check for longest valid match.
 	var n = 0
 	for k, v := range mux.m {
 		if !pathMatch(k, path) {
@@ -2176,7 +2208,10 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 // consulting r.Method, r.Host, and r.URL.Path. It always returns
 // a non-nil handler. If the path is not in its canonical form, the
 // handler will be an internally-generated handler that redirects
-// to the canonical path.
+// to the canonical path. If the host contains a port, it is ignored
+// when matching handlers.
+//
+// The path and host are used unchanged for CONNECT requests.
 //
 // Handler also returns the registered pattern that matches the
 // request or, in the case of internally-generated redirects,
@@ -2185,16 +2220,24 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 // If there is no registered handler that applies to the request,
 // Handler returns a ``page not found'' handler and an empty pattern.
 func (mux *ServeMux) Handler(r *Request) (h Handler, pattern string) {
-	if r.Method != "CONNECT" {
-		if p := cleanPath(r.URL.Path); p != r.URL.Path {
-			_, pattern = mux.handler(r.Host, p)
-			url := *r.URL
-			url.Path = p
-			return RedirectHandler(url.String(), StatusMovedPermanently), pattern
-		}
+
+	// CONNECT requests are not canonicalized.
+	if r.Method == "CONNECT" {
+		return mux.handler(r.Host, r.URL.Path)
 	}
 
-	return mux.handler(r.Host, r.URL.Path)
+	// All other requests have any port stripped and path cleaned
+	// before passing to mux.handler.
+	host := stripHostPort(r.Host)
+	path := cleanPath(r.URL.Path)
+	if path != r.URL.Path {
+		_, pattern = mux.handler(host, path)
+		url := *r.URL
+		url.Path = path
+		return RedirectHandler(url.String(), StatusMovedPermanently), pattern
+	}
+
+	return mux.handler(host, r.URL.Path)
 }
 
 // handler is the main implementation of Handler.
@@ -2601,6 +2644,8 @@ func (srv *Server) shouldConfigureHTTP2ForServe() bool {
 	return strSliceContains(srv.TLSConfig.NextProtos, http2NextProtoTLS)
 }
 
+// ErrServerClosed is returned by the Server's Serve, ListenAndServe,
+// and ListenAndServeTLS methods after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("http: Server closed")
 
 // Serve accepts incoming connections on the Listener l, creating a

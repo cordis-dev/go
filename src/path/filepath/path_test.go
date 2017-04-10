@@ -6,12 +6,14 @@ package filepath_test
 
 import (
 	"errors"
+	"fmt"
 	"internal/testenv"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -665,6 +667,7 @@ var windirtests = []PathTest{
 	{`c:\a\b`, `c:\a`},
 	{`c:a\b`, `c:a`},
 	{`c:a\b\c`, `c:a\b`},
+	{`\\host\share`, `\\host\share`},
 	{`\\host\share\`, `\\host\share\`},
 	{`\\host\share\a`, `\\host\share\`},
 	{`\\host\share\a\b`, `\\host\share\a`},
@@ -1325,4 +1328,57 @@ func TestBug3486(t *testing.T) { // https://golang.org/issue/3486
 	if !seenKen {
 		t.Fatalf("%q not seen", ken)
 	}
+}
+
+func testWalkSymlink(t *testing.T, mklink func(target, link string) error) {
+	tmpdir, err := ioutil.TempDir("", "testWalkSymlink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpdir)
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+
+	err = os.Chdir(tmpdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = mklink(tmpdir, "link")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var visited []string
+	err = filepath.Walk(tmpdir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			t.Fatal(err)
+		}
+		rel, err := filepath.Rel(tmpdir, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		visited = append(visited, rel)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(visited)
+	want := []string{".", "link"}
+	if fmt.Sprintf("%q", visited) != fmt.Sprintf("%q", want) {
+		t.Errorf("unexpected paths visited %q, want %q", visited, want)
+	}
+}
+
+func TestWalkSymlink(t *testing.T) {
+	testenv.MustHaveSymlink(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping broken test: see issue 17540")
+	}
+	testWalkSymlink(t, os.Symlink)
 }

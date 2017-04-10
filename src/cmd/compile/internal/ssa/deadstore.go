@@ -4,6 +4,8 @@
 
 package ssa
 
+import "cmd/internal/src"
+
 // dse does dead-store elimination on the Function.
 // Dead stores are those which are unconditionally followed by
 // another store to the same location, with no intervening load.
@@ -86,9 +88,9 @@ func dse(f *Func) {
 		if v.Op == OpStore || v.Op == OpZero {
 			var sz int64
 			if v.Op == OpStore {
-				sz = v.AuxInt
+				sz = v.Aux.(Type).Size()
 			} else { // OpZero
-				sz = SizeAndAlign(v.AuxInt).Size()
+				sz = v.AuxInt
 			}
 			if shadowedSize := int64(shadowed.get(v.Args[0].ID)); shadowedSize != -1 && shadowedSize >= sz {
 				// Modify store into a copy
@@ -111,7 +113,7 @@ func dse(f *Func) {
 				if sz > 0x7fffffff { // work around sparseMap's int32 value type
 					sz = 0x7fffffff
 				}
-				shadowed.set(v.Args[0].ID, int32(sz), 0)
+				shadowed.set(v.Args[0].ID, int32(sz), src.NoXPos)
 			}
 		}
 		// walk to previous store

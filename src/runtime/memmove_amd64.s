@@ -146,10 +146,16 @@ move_1or2:
 move_0:
 	RET
 move_3or4:
+	CMPQ	BX, $4
+	JB	move_3
+	MOVL	(SI), AX
+	MOVL	AX, (DI)
+	RET
+move_3:
 	MOVW	(SI), AX
-	MOVW	-2(SI)(BX*1), CX
+	MOVB	2(SI), CX
 	MOVW	AX, (DI)
-	MOVW	CX, -2(DI)(BX*1)
+	MOVB	CX, 2(DI)
 	RET
 move_5through7:
 	MOVL	(SI), AX
@@ -401,7 +407,7 @@ gobble_big_data_fwd:
 gobble_mem_fwd_loop:
 	PREFETCHNTA 0x1C0(SI)
 	PREFETCHNTA 0x280(SI)
-	// Prefetch values were choosen empirically.
+	// Prefetch values were chosen empirically.
 	// Approach for prefetch usage as in 7.6.6 of [1]
 	// [1] 64-ia-32-architectures-optimization-manual.pdf
 	// http://www.intel.ru/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf

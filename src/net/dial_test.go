@@ -7,6 +7,7 @@ package net
 import (
 	"bufio"
 	"context"
+	"internal/poll"
 	"internal/testenv"
 	"io"
 	"net/internal/socktest"
@@ -94,7 +95,7 @@ func TestDialTimeoutFDLeak(t *testing.T) {
 	default:
 		sw.Set(socktest.FilterConnect, func(so *socktest.Status) (socktest.AfterFilter, error) {
 			time.Sleep(2 * T)
-			return nil, errTimeout
+			return nil, poll.ErrTimeout
 		})
 		defer sw.Set(socktest.FilterConnect, nil)
 	}
@@ -585,8 +586,8 @@ func TestDialerPartialDeadline(t *testing.T) {
 		{now, noDeadline, 1, noDeadline, nil},
 		// Step the clock forward and cross the deadline.
 		{now.Add(-1 * time.Millisecond), now, 1, now, nil},
-		{now.Add(0 * time.Millisecond), now, 1, noDeadline, errTimeout},
-		{now.Add(1 * time.Millisecond), now, 1, noDeadline, errTimeout},
+		{now.Add(0 * time.Millisecond), now, 1, noDeadline, poll.ErrTimeout},
+		{now.Add(1 * time.Millisecond), now, 1, noDeadline, poll.ErrTimeout},
 	}
 	for i, tt := range testCases {
 		deadline, err := partialDeadline(tt.now, tt.deadline, tt.addrs)
@@ -714,11 +715,8 @@ func TestDialerLocalAddr(t *testing.T) {
 }
 
 func TestDialerDualStack(t *testing.T) {
-	// This test is known to be flaky. Don't frighten regular
-	// users about it; only fail on the build dashboard.
-	if testenv.Builder() == "" {
-		testenv.SkipFlaky(t, 13324)
-	}
+	testenv.SkipFlaky(t, 13324)
+
 	if !supportsIPv4 || !supportsIPv6 {
 		t.Skip("both IPv4 and IPv6 are required")
 	}

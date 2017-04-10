@@ -133,19 +133,9 @@ func archinit(ctxt *ld.Link) {
 			*ld.FlagRound = 0x10000
 		}
 
-	case obj.Hwindows, obj.Hwindowsgui: /* PE executable */
-		ld.Peinit(ctxt)
-
-		ld.HEADR = ld.PEFILEHEADR
-		if *ld.FlagTextAddr == -1 {
-			*ld.FlagTextAddr = ld.PEBASE + int64(ld.PESECTHEADR)
-		}
-		if *ld.FlagDataAddr == -1 {
-			*ld.FlagDataAddr = 0
-		}
-		if *ld.FlagRound == -1 {
-			*ld.FlagRound = ld.PESECTALIGN
-		}
+	case obj.Hwindows: /* PE executable */
+		// ld.HEADR, ld.FlagTextAddr, ld.FlagDataAddr and ld.FlagRound are set in ld.Peinit
+		return
 	}
 
 	if *ld.FlagDataAddr != 0 && *ld.FlagRound != 0 {

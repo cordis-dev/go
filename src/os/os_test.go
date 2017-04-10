@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ func size(name string, t *testing.T) int64 {
 			break
 		}
 		if e != nil {
-			t.Fatal("read failed:", err)
+			t.Fatal("read failed:", e)
 		}
 	}
 	return int64(len)
@@ -1053,14 +1054,22 @@ func testChtimes(t *testing.T, name string) {
 	}
 	postStat := st
 
-	/* Plan 9, NaCl:
-		Mtime is the time of the last change of content.  Similarly, atime is set whenever the
-	    contents are accessed; also, it is set whenever mtime is set.
-	*/
 	pat := Atime(postStat)
 	pmt := postStat.ModTime()
-	if !pat.Before(at) && runtime.GOOS != "plan9" && runtime.GOOS != "nacl" {
-		t.Errorf("AccessTime didn't go backwards; was=%d, after=%d", at, pat)
+	if !pat.Before(at) {
+		switch runtime.GOOS {
+		case "plan9", "nacl":
+			// Ignore.
+			// Plan 9, NaCl:
+			// Mtime is the time of the last change of
+			// content.  Similarly, atime is set whenever
+			// the contents are accessed; also, it is set
+			// whenever mtime is set.
+		case "netbsd":
+			t.Logf("AccessTime didn't go backwards; was=%d, after=%d (Ignoring. See NetBSD issue golang.org/issue/19293)", at, pat)
+		default:
+			t.Errorf("AccessTime didn't go backwards; was=%d, after=%d", at, pat)
+		}
 	}
 
 	if !pmt.Before(mt) {
@@ -1666,6 +1675,17 @@ func TestStatStdin(t *testing.T) {
 		Exit(0)
 	}
 
+	fi, err := Stdin.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch mode := fi.Mode(); {
+	case mode&ModeCharDevice != 0:
+	case mode&ModeNamedPipe != 0:
+	default:
+		t.Fatalf("unexpected Stdin mode (%v), want ModeCharDevice or ModeNamedPipe", mode)
+	}
+
 	var cmd *osexec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = osexec.Command("cmd", "/c", "echo output | "+Args[0]+" -test.run=TestStatStdin")
@@ -1682,6 +1702,43 @@ func TestStatStdin(t *testing.T) {
 	// result will be like "prw-rw-rw"
 	if len(output) < 1 || output[0] != 'p' {
 		t.Fatalf("Child process reports stdin is not pipe '%v'", string(output))
+	}
+}
+
+func TestStatRelativeSymlink(t *testing.T) {
+	testenv.MustHaveSymlink(t)
+
+	tmpdir, err := ioutil.TempDir("", "TestStatRelativeSymlink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer RemoveAll(tmpdir)
+
+	target := filepath.Join(tmpdir, "target")
+	f, err := Create(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	link := filepath.Join(tmpdir, "link")
+	err = Symlink(filepath.Base(target), link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st1, err := Stat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !SameFile(st, st1) {
+		t.Error("Stat doesn't follow relative symlink")
 	}
 }
 
@@ -1925,4 +1982,80 @@ func TestRemoveAllRace(t *testing.T) {
 	}
 	close(hold) // let workers race to remove root
 	wg.Wait()
+}
+
+// Test that reading from a pipe doesn't use up a thread.
+func TestPipeThreads(t *testing.T) {
+	switch runtime.GOOS {
+	case "freebsd":
+		t.Skip("skipping on FreeBSD; issue 19093")
+	case "solaris":
+		t.Skip("skipping on Solaris; issue 19111")
+	case "windows":
+		t.Skip("skipping on Windows; issue 19098")
+	case "plan9":
+		t.Skip("skipping on Plan 9; does not support runtime poller")
+	}
+
+	threads := 100
+
+	// OpenBSD has a low default for max number of files.
+	if runtime.GOOS == "openbsd" {
+		threads = 50
+	}
+
+	r := make([]*File, threads)
+	w := make([]*File, threads)
+	for i := 0; i < threads; i++ {
+		rp, wp, err := Pipe()
+		if err != nil {
+			for j := 0; j < i; j++ {
+				r[j].Close()
+				w[j].Close()
+			}
+			t.Fatal(err)
+		}
+		r[i] = rp
+		w[i] = wp
+	}
+
+	defer debug.SetMaxThreads(debug.SetMaxThreads(threads / 2))
+
+	var wg sync.WaitGroup
+	wg.Add(threads)
+	c := make(chan bool, threads)
+	for i := 0; i < threads; i++ {
+		go func(i int) {
+			defer wg.Done()
+			var b [1]byte
+			c <- true
+			if _, err := r[i].Read(b[:]); err != nil {
+				t.Error(err)
+			}
+		}(i)
+	}
+
+	for i := 0; i < threads; i++ {
+		<-c
+	}
+
+	// If we are still alive, it means that the 100 goroutines did
+	// not require 100 threads.
+
+	for i := 0; i < threads; i++ {
+		if _, err := w[i].Write([]byte{0}); err != nil {
+			t.Error(err)
+		}
+		if err := w[i].Close(); err != nil {
+			t.Error(err)
+		}
+	}
+
+	wg.Wait()
+
+	for i := 0; i < threads; i++ {
+		if err := r[i].Close(); err != nil {
+			t.Error(err)
+		}
+	}
 }

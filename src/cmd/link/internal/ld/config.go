@@ -84,7 +84,7 @@ func (mode *BuildMode) Set(s string) error {
 		switch obj.GOOS {
 		case "linux":
 			switch obj.GOARCH {
-			case "386", "amd64", "arm", "arm64":
+			case "386", "amd64", "arm", "arm64", "s390x":
 			default:
 				return badmode()
 			}
@@ -238,6 +238,8 @@ func determineLinkMode(ctxt *Link) {
 				Linkmode = LinkExternal
 			} else if iscgo && externalobj {
 				Linkmode = LinkExternal
+			} else if Buildmode == BuildmodePIE {
+				Linkmode = LinkExternal // https://golang.org/issue/18968
 			} else {
 				Linkmode = LinkInternal
 			}

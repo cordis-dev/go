@@ -17,7 +17,7 @@
 // 	clean       remove object files
 // 	doc         show documentation for package or symbol
 // 	env         print Go environment information
-// 	bug         print information for bug reports
+// 	bug         start a bug report
 // 	fix         run go tool fix on packages
 // 	fmt         run gofmt on package sources
 // 	generate    generate Go files by processing source
@@ -131,16 +131,17 @@
 // 		For example, when building with a non-standard configuration,
 // 		use -pkgdir to keep generated packages in a separate location.
 // 	-tags 'tag list'
-// 		a list of build tags to consider satisfied during the build.
-// 		For more information about build tags, see the description of
+// 		a space-separated list of build tags to consider satisfied during the
+// 		build. For more information about build tags, see the description of
 // 		build constraints in the documentation for the go/build package.
 // 	-toolexec 'cmd args'
 // 		a program to use to invoke toolchain programs like vet and asm.
 // 		For example, instead of running asm, the go command will run
 // 		'cmd args /path/to/asm <arguments for asm>'.
 //
-// The list flags accept a space-separated list of strings. To embed spaces
-// in an element in the list, surround it with either single or double quotes.
+// All the flags that take a list of arguments accept a space-separated
+// list of strings. To embed spaces in an element in the list, surround
+// it with either single or double quotes.
 //
 // For more about specifying packages, see 'go help packages'.
 // For more about where packages and binaries are installed,
@@ -208,12 +209,13 @@
 //
 // Usage:
 //
-// 	go doc [-u] [-c] [package|[package.]symbol[.method]]
+// 	go doc [-u] [-c] [package|[package.]symbol[.methodOrField]]
 //
 // Doc prints the documentation comments associated with the item identified by its
-// arguments (a package, const, func, type, var, or method) followed by a one-line
-// summary of each of the first-level items "under" that item (package-level
-// declarations for a package, methods for a type, etc.).
+// arguments (a package, const, func, type, var, method, or struct field)
+// followed by a one-line summary of each of the first-level items "under"
+// that item (package-level declarations for a package, methods for a type,
+// etc.).
 //
 // Doc accepts zero, one, or two arguments.
 //
@@ -231,9 +233,9 @@
 // which is schematically one of these:
 //
 // 	go doc <pkg>
-// 	go doc <sym>[.<method>]
-// 	go doc [<pkg>.]<sym>[.<method>]
-// 	go doc [<pkg>.][<sym>.]<method>
+// 	go doc <sym>[.<methodOrField>]
+// 	go doc [<pkg>.]<sym>[.<methodOrField>]
+// 	go doc [<pkg>.][<sym>.]<methodOrField>
 //
 // The first item in this list matched by the argument is the one whose documentation
 // is printed. (See the examples below.) However, if the argument starts with a capital
@@ -253,10 +255,10 @@
 // elements like . and ... are not implemented by go doc.
 //
 // When run with two arguments, the first must be a full package path (not just a
-// suffix), and the second is a symbol or symbol and method; this is similar to the
-// syntax accepted by godoc:
+// suffix), and the second is a symbol, or symbol with method or struct field.
+// This is similar to the syntax accepted by godoc:
 //
-// 	go doc <pkg> <sym>[.<method>]
+// 	go doc <pkg> <sym>[.<methodOrField>]
 //
 // In all forms, when matching symbols, lower-case letters in the argument match
 // either case but upper-case letters match exactly. This means that there may be
@@ -307,14 +309,14 @@
 // 		when showing the package's top-level documentation.
 // 	-u
 // 		Show documentation for unexported as well as exported
-// 		symbols and methods.
+// 		symbols, methods, and fields.
 //
 //
 // Print Go environment information
 //
 // Usage:
 //
-// 	go env [var ...]
+// 	go env [-json] [var ...]
 //
 // Env prints Go environment information.
 //
@@ -323,16 +325,18 @@
 // names is given as arguments,  env prints the value of
 // each named variable on its own line.
 //
+// The -json flag prints the environment in JSON format
+// instead of as a shell script.
 //
-// Print information for bug reports
+//
+// Start a bug report
 //
 // Usage:
 //
 // 	go bug
 //
-// Bug prints information that helps file effective bug reports.
-//
-// Bugs may be reported at https://golang.org/issue/new.
+// Bug opens the default browser and starts a new bug report.
+// The report includes useful system information.
 //
 //
 // Run go tool fix on packages
@@ -1360,8 +1364,19 @@
 // each of which can match any string, including the empty string and
 // strings containing slashes.  Such a pattern expands to all package
 // directories found in the GOPATH trees with names matching the
-// patterns.  As a special case, x/... matches x as well as x's subdirectories.
-// For example, net/... expands to net and packages in its subdirectories.
+// patterns.
+//
+// To make common patterns more convenient, there are two special cases.
+// First, /... at the end of the pattern can match an empty string,
+// so that net/... matches both net and packages in its subdirectories, like net/http.
+// Second, any slash-separated pattern element containing a wildcard never
+// participates in a match of the "vendor" element in the path of a vendored
+// package, so that ./... does not match packages in subdirectories of
+// ./vendor or ./mycode/vendor, but ./vendor/... and ./mycode/vendor/... do.
+// Note, however, that a directory named vendor that itself contains code
+// is not a vendored package: cmd/vendor would be a command named vendor,
+// and the pattern cmd/... matches it.
+// See golang.org/s/go15vendor for more about vendoring.
 //
 // An import path can also name a package to be downloaded from
 // a remote repository.  Run 'go help importpath' for details.

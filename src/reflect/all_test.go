@@ -26,6 +26,8 @@ import (
 	"unsafe"
 )
 
+var sink interface{}
+
 func TestBool(t *testing.T) {
 	v := ValueOf(true)
 	if v.Bool() != true {
@@ -1679,6 +1681,11 @@ func (p Point) GCMethod(k int) int {
 }
 
 // This will be index 3.
+func (p Point) NoArgs() {
+	// Exercise no-argument/no-result paths.
+}
+
+// This will be index 4.
 func (p Point) TotalDist(points ...Point) int {
 	tot := 0
 	for _, q := range points {
@@ -1707,6 +1714,15 @@ func TestMethod(t *testing.T) {
 		t.Errorf("Type MethodByName returned %d; want 275", i)
 	}
 
+	m, ok = TypeOf(p).MethodByName("NoArgs")
+	if !ok {
+		t.Fatalf("method by name failed")
+	}
+	n := len(m.Func.Call([]Value{ValueOf(p)}))
+	if n != 0 {
+		t.Errorf("NoArgs returned %d values; want 0", n)
+	}
+
 	i = TypeOf(&p).Method(1).Func.Call([]Value{ValueOf(&p), ValueOf(12)})[0].Int()
 	if i != 300 {
 		t.Errorf("Pointer Type Method returned %d; want 300", i)
@@ -1719,6 +1735,15 @@ func TestMethod(t *testing.T) {
 	i = m.Func.Call([]Value{ValueOf(&p), ValueOf(13)})[0].Int()
 	if i != 325 {
 		t.Errorf("Pointer Type MethodByName returned %d; want 325", i)
+	}
+
+	m, ok = TypeOf(&p).MethodByName("NoArgs")
+	if !ok {
+		t.Fatalf("method by name failed")
+	}
+	n = len(m.Func.Call([]Value{ValueOf(&p)}))
+	if n != 0 {
+		t.Errorf("NoArgs returned %d values; want 0", n)
 	}
 
 	// Curried method of value.
@@ -1739,6 +1764,8 @@ func TestMethod(t *testing.T) {
 	if i != 375 {
 		t.Errorf("Value MethodByName returned %d; want 375", i)
 	}
+	v = ValueOf(p).MethodByName("NoArgs")
+	v.Call(nil)
 
 	// Curried method of pointer.
 	v = ValueOf(&p).Method(1)
@@ -1757,6 +1784,8 @@ func TestMethod(t *testing.T) {
 	if i != 425 {
 		t.Errorf("Pointer Value MethodByName returned %d; want 425", i)
 	}
+	v = ValueOf(&p).MethodByName("NoArgs")
+	v.Call(nil)
 
 	// Curried method of interface value.
 	// Have to wrap interface value in a struct to get at it.
@@ -1806,6 +1835,9 @@ func TestMethodValue(t *testing.T) {
 	if i != 275 {
 		t.Errorf("Value MethodByName returned %d; want 275", i)
 	}
+	v = ValueOf(p).MethodByName("NoArgs")
+	ValueOf(v.Interface()).Call(nil)
+	v.Interface().(func())()
 
 	// Curried method of pointer.
 	v = ValueOf(&p).Method(1)
@@ -1824,6 +1856,9 @@ func TestMethodValue(t *testing.T) {
 	if i != 325 {
 		t.Errorf("Pointer Value MethodByName returned %d; want 325", i)
 	}
+	v = ValueOf(&p).MethodByName("NoArgs")
+	ValueOf(v.Interface()).Call(nil)
+	v.Interface().(func())()
 
 	// Curried method of pointer to pointer.
 	pp := &p
@@ -1879,7 +1914,7 @@ func TestVariadicMethodValue(t *testing.T) {
 
 	// Curried method of value.
 	tfunc := TypeOf((func(...Point) int)(nil))
-	v := ValueOf(p).Method(3)
+	v := ValueOf(p).Method(4)
 	if tt := v.Type(); tt != tfunc {
 		t.Errorf("Variadic Method Type is %s; want %s", tt, tfunc)
 	}
@@ -2476,17 +2511,24 @@ func TestNumMethodOnDDD(t *testing.T) {
 }
 
 func TestPtrTo(t *testing.T) {
+	// This block of code means that the ptrToThis field of the
+	// reflect data for *unsafe.Pointer is non zero, see
+	// https://golang.org/issue/19003
+	var x unsafe.Pointer
+	var y = &x
+	var z = &y
+
 	var i int
 
-	typ := TypeOf(i)
+	typ := TypeOf(z)
 	for i = 0; i < 100; i++ {
 		typ = PtrTo(typ)
 	}
 	for i = 0; i < 100; i++ {
 		typ = typ.Elem()
 	}
-	if typ != TypeOf(i) {
-		t.Errorf("after 100 PtrTo and Elem, have %s, want %s", typ, TypeOf(i))
+	if typ != TypeOf(z) {
+		t.Errorf("after 100 PtrTo and Elem, have %s, want %s", typ, TypeOf(z))
 	}
 }
 
@@ -3689,7 +3731,7 @@ func checkSameType(t *testing.T, x, y interface{}) {
 
 func TestArrayOf(t *testing.T) {
 	// check construction and use of type not in binary
-	for _, table := range []struct {
+	tests := []struct {
 		n          int
 		value      func(i int) interface{}
 		comparable bool
@@ -3767,7 +3809,9 @@ func TestArrayOf(t *testing.T) {
 			comparable: true,
 			want:       "[{0 0} {1 1} {2 2} {3 3} {4 4} {5 5} {6 6} {7 7} {8 8} {9 9}]",
 		},
-	} {
+	}
+
+	for _, table := range tests {
 		at := ArrayOf(table.n, TypeOf(table.value(0)))
 		v := New(at).Elem()
 		vok := New(at).Elem()
@@ -4133,50 +4177,58 @@ func TestStructOfExportRules(t *testing.T) {
 		f()
 	}
 
-	for i, test := range []struct {
+	tests := []struct {
 		field     StructField
 		mustPanic bool
 		exported  bool
 	}{
 		{
-			field:     StructField{Name: "", Type: TypeOf(S1{})},
-			mustPanic: false,
-			exported:  true,
+			field:    StructField{Name: "S1", Anonymous: true, Type: TypeOf(S1{})},
+			exported: true,
 		},
 		{
-			field:     StructField{Name: "", Type: TypeOf((*S1)(nil))},
-			mustPanic: false,
-			exported:  true,
+			field:    StructField{Name: "S1", Anonymous: true, Type: TypeOf((*S1)(nil))},
+			exported: true,
 		},
 		{
-			field:     StructField{Name: "", Type: TypeOf(s2{})},
-			mustPanic: false,
-			exported:  false,
-		},
-		{
-			field:     StructField{Name: "", Type: TypeOf((*s2)(nil))},
-			mustPanic: false,
-			exported:  false,
-		},
-		{
-			field:     StructField{Name: "", Type: TypeOf(S1{}), PkgPath: "other/pkg"},
+			field:     StructField{Name: "s2", Anonymous: true, Type: TypeOf(s2{})},
 			mustPanic: true,
-			exported:  true,
 		},
 		{
-			field:     StructField{Name: "", Type: TypeOf((*S1)(nil)), PkgPath: "other/pkg"},
+			field:     StructField{Name: "s2", Anonymous: true, Type: TypeOf((*s2)(nil))},
 			mustPanic: true,
-			exported:  true,
 		},
 		{
-			field:     StructField{Name: "", Type: TypeOf(s2{}), PkgPath: "other/pkg"},
+			field:     StructField{Name: "Name", Type: nil, PkgPath: ""},
 			mustPanic: true,
-			exported:  false,
 		},
 		{
-			field:     StructField{Name: "", Type: TypeOf((*s2)(nil)), PkgPath: "other/pkg"},
+			field:     StructField{Name: "", Type: TypeOf(S1{}), PkgPath: ""},
 			mustPanic: true,
-			exported:  false,
+		},
+		{
+			field:     StructField{Name: "S1", Anonymous: true, Type: TypeOf(S1{}), PkgPath: "other/pkg"},
+			mustPanic: true,
+		},
+		{
+			field:     StructField{Name: "S1", Anonymous: true, Type: TypeOf((*S1)(nil)), PkgPath: "other/pkg"},
+			mustPanic: true,
+		},
+		{
+			field:     StructField{Name: "s2", Anonymous: true, Type: TypeOf(s2{}), PkgPath: "other/pkg"},
+			mustPanic: true,
+		},
+		{
+			field:     StructField{Name: "s2", Anonymous: true, Type: TypeOf((*s2)(nil)), PkgPath: "other/pkg"},
+			mustPanic: true,
+		},
+		{
+			field:     StructField{Name: "s2", Type: TypeOf(int(0)), PkgPath: "other/pkg"},
+			mustPanic: true,
+		},
+		{
+			field:     StructField{Name: "s2", Type: TypeOf(int(0)), PkgPath: "other/pkg"},
+			mustPanic: true,
 		},
 		{
 			field:     StructField{Name: "S", Type: TypeOf(S1{})},
@@ -4184,81 +4236,68 @@ func TestStructOfExportRules(t *testing.T) {
 			exported:  true,
 		},
 		{
-			field:     StructField{Name: "S", Type: TypeOf((*S1)(nil))},
-			mustPanic: false,
-			exported:  true,
+			field:    StructField{Name: "S", Type: TypeOf((*S1)(nil))},
+			exported: true,
 		},
 		{
-			field:     StructField{Name: "S", Type: TypeOf(s2{})},
-			mustPanic: false,
-			exported:  true,
+			field:    StructField{Name: "S", Type: TypeOf(s2{})},
+			exported: true,
 		},
 		{
-			field:     StructField{Name: "S", Type: TypeOf((*s2)(nil))},
-			mustPanic: false,
-			exported:  true,
+			field:    StructField{Name: "S", Type: TypeOf((*s2)(nil))},
+			exported: true,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf(S1{})},
 			mustPanic: true,
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf((*S1)(nil))},
 			mustPanic: true,
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf(s2{})},
 			mustPanic: true,
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf((*s2)(nil))},
 			mustPanic: true,
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf(S1{}), PkgPath: "other/pkg"},
 			mustPanic: true, // TODO(sbinet): creating a name with a package path
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf((*S1)(nil)), PkgPath: "other/pkg"},
 			mustPanic: true, // TODO(sbinet): creating a name with a package path
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf(s2{}), PkgPath: "other/pkg"},
 			mustPanic: true, // TODO(sbinet): creating a name with a package path
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "s", Type: TypeOf((*s2)(nil)), PkgPath: "other/pkg"},
 			mustPanic: true, // TODO(sbinet): creating a name with a package path
-			exported:  false,
 		},
 		{
 			field:     StructField{Name: "", Type: TypeOf(ΦType{})},
-			mustPanic: false,
-			exported:  true,
+			mustPanic: true,
 		},
 		{
 			field:     StructField{Name: "", Type: TypeOf(φType{})},
-			mustPanic: false,
-			exported:  false,
+			mustPanic: true,
 		},
 		{
-			field:     StructField{Name: "Φ", Type: TypeOf(0)},
-			mustPanic: false,
-			exported:  true,
+			field:    StructField{Name: "Φ", Type: TypeOf(0)},
+			exported: true,
 		},
 		{
-			field:     StructField{Name: "φ", Type: TypeOf(0)},
-			mustPanic: false,
-			exported:  false,
+			field:    StructField{Name: "φ", Type: TypeOf(0)},
+			exported: false,
 		},
-	} {
+	}
+
+	for i, test := range tests {
 		testPanic(i, test.mustPanic, func() {
 			typ := StructOf([]StructField{test.field})
 			if typ == nil {
@@ -4268,7 +4307,7 @@ func TestStructOfExportRules(t *testing.T) {
 			field := typ.Field(0)
 			n := field.Name
 			if n == "" {
-				n = field.Type.Name()
+				panic("field.Name must not be empty")
 			}
 			exported := isExported(n)
 			if exported != test.exported {
@@ -4346,7 +4385,7 @@ func TestStructOfGenericAlg(t *testing.T) {
 		{Name: "S1", Type: st1},
 	})
 
-	for _, table := range []struct {
+	tests := []struct {
 		rt  Type
 		idx []int
 	}{
@@ -4427,7 +4466,9 @@ func TestStructOfGenericAlg(t *testing.T) {
 			),
 			idx: []int{2},
 		},
-	} {
+	}
+
+	for _, table := range tests {
 		v1 := New(table.rt).Elem()
 		v2 := New(table.rt).Elem()
 
@@ -4529,18 +4570,21 @@ func TestStructOfWithInterface(t *testing.T) {
 	type Iface interface {
 		Get() int
 	}
-	for i, table := range []struct {
+	tests := []struct {
+		name string
 		typ  Type
 		val  Value
 		impl bool
 	}{
 		{
+			name: "StructI",
 			typ:  TypeOf(StructI(want)),
 			val:  ValueOf(StructI(want)),
 			impl: true,
 		},
 		{
-			typ: PtrTo(TypeOf(StructI(want))),
+			name: "StructI",
+			typ:  PtrTo(TypeOf(StructI(want))),
 			val: ValueOf(func() interface{} {
 				v := StructI(want)
 				return &v
@@ -4548,7 +4592,8 @@ func TestStructOfWithInterface(t *testing.T) {
 			impl: true,
 		},
 		{
-			typ: PtrTo(TypeOf(StructIPtr(want))),
+			name: "StructIPtr",
+			typ:  PtrTo(TypeOf(StructIPtr(want))),
 			val: ValueOf(func() interface{} {
 				v := StructIPtr(want)
 				return &v
@@ -4556,6 +4601,7 @@ func TestStructOfWithInterface(t *testing.T) {
 			impl: true,
 		},
 		{
+			name: "StructIPtr",
 			typ:  TypeOf(StructIPtr(want)),
 			val:  ValueOf(StructIPtr(want)),
 			impl: false,
@@ -4565,13 +4611,16 @@ func TestStructOfWithInterface(t *testing.T) {
 		//	val:  ValueOf(StructI(want)),
 		//	impl: true,
 		// },
-	} {
+	}
+
+	for i, table := range tests {
 		rt := StructOf(
 			[]StructField{
 				{
-					Name:    "",
-					PkgPath: "",
-					Type:    table.typ,
+					Name:      table.name,
+					Anonymous: true,
+					PkgPath:   "",
+					Type:      table.typ,
 				},
 			},
 		)
@@ -5331,6 +5380,72 @@ func TestCallGC(t *testing.T) {
 	f2("four", "five5", "six666", "seven77", "eight888")
 }
 
+// Issue 18635 (function version).
+func TestKeepFuncLive(t *testing.T) {
+	// Test that we keep makeFuncImpl live as long as it is
+	// referenced on the stack.
+	typ := TypeOf(func(i int) {})
+	var f, g func(in []Value) []Value
+	f = func(in []Value) []Value {
+		clobber()
+		i := int(in[0].Int())
+		if i > 0 {
+			// We can't use Value.Call here because
+			// runtime.call* will keep the makeFuncImpl
+			// alive. However, by converting it to an
+			// interface value and calling that,
+			// reflect.callReflect is the only thing that
+			// can keep the makeFuncImpl live.
+			//
+			// Alternate between f and g so that if we do
+			// reuse the memory prematurely it's more
+			// likely to get obviously corrupted.
+			MakeFunc(typ, g).Interface().(func(i int))(i - 1)
+		}
+		return nil
+	}
+	g = func(in []Value) []Value {
+		clobber()
+		i := int(in[0].Int())
+		MakeFunc(typ, f).Interface().(func(i int))(i)
+		return nil
+	}
+	MakeFunc(typ, f).Call([]Value{ValueOf(10)})
+}
+
+// Issue 18635 (method version).
+type KeepMethodLive struct{}
+
+func (k KeepMethodLive) Method1(i int) {
+	clobber()
+	if i > 0 {
+		ValueOf(k).MethodByName("Method2").Interface().(func(i int))(i - 1)
+	}
+}
+
+func (k KeepMethodLive) Method2(i int) {
+	clobber()
+	ValueOf(k).MethodByName("Method1").Interface().(func(i int))(i)
+}
+
+func TestKeepMethodLive(t *testing.T) {
+	// Test that we keep methodValue live as long as it is
+	// referenced on the stack.
+	KeepMethodLive{}.Method1(10)
+}
+
+// clobber tries to clobber unreachable memory.
+func clobber() {
+	runtime.GC()
+	for i := 1; i < 32; i++ {
+		for j := 0; j < 10; j++ {
+			obj := make([]*byte, i)
+			sink = obj
+		}
+	}
+	runtime.GC()
+}
+
 type funcLayoutTest struct {
 	rcvr, t                  Type
 	size, argsize, retOffset uintptr
@@ -5735,6 +5850,24 @@ func TestMapAlloc(t *testing.T) {
 	if allocs > 0.5 {
 		t.Errorf("allocs per map assignment: want 0 got %f", allocs)
 	}
+
+	const size = 1000
+	tmp := 0
+	val := ValueOf(&tmp).Elem()
+	allocs = testing.AllocsPerRun(100, func() {
+		mv := MakeMapWithSize(TypeOf(map[int]int{}), size)
+		// Only adding half of the capacity to not trigger re-allocations due too many overloaded buckets.
+		for i := 0; i < size/2; i++ {
+			val.SetInt(int64(i))
+			mv.SetMapIndex(val, val)
+		}
+	})
+	if allocs > 10 {
+		t.Errorf("allocs per map assignment: want at most 10 got %f", allocs)
+	}
+	// Empirical testing shows that with capacity hint single run will trigger 3 allocations and without 91. I set
+	// the threshold to 10, to not make it overly brittle if something changes in the initial allocation of the
+	// map, but to still catch a regression where we keep re-allocating in the hashmap as new entries are added.
 }
 
 func TestChanAlloc(t *testing.T) {
@@ -5951,6 +6084,7 @@ func TestSwapper(t *testing.T) {
 			want: []pairPtr{{5, 6, &c}, {3, 4, &b}, {1, 2, &a}},
 		},
 	}
+
 	for i, tt := range tests {
 		inStr := fmt.Sprint(tt.in)
 		Swapper(tt.in)(tt.i, tt.j)
@@ -5975,4 +6109,37 @@ func TestUnaddressableField(t *testing.T) {
 	shouldPanic(func() {
 		lv.Set(rv)
 	})
+}
+
+type Tint int
+
+type Tint2 = Tint
+
+type Talias1 struct {
+	byte
+	uint8
+	int
+	int32
+	rune
+}
+
+type Talias2 struct {
+	Tint
+	Tint2
+}
+
+func TestAliasNames(t *testing.T) {
+	t1 := Talias1{byte: 1, uint8: 2, int: 3, int32: 4, rune: 5}
+	out := fmt.Sprintf("%#v", t1)
+	want := "reflect_test.Talias1{byte:0x1, uint8:0x2, int:3, int32:4, rune:5}"
+	if out != want {
+		t.Errorf("Talias1 print:\nhave: %s\nwant: %s", out, want)
+	}
+
+	t2 := Talias2{Tint: 1, Tint2: 2}
+	out = fmt.Sprintf("%#v", t2)
+	want = "reflect_test.Talias2{Tint:1, Tint2:2}"
+	if out != want {
+		t.Errorf("Talias2 print:\nhave: %s\nwant: %s", out, want)
+	}
 }

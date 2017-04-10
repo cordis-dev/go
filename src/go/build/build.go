@@ -155,6 +155,7 @@ func (ctxt *Context) hasSubdir(root, dir string) (rel string, ok bool) {
 	return hasSubdir(rootSym, dirSym)
 }
 
+// hasSubdir reports if dir is within root by performing lexical analysis only.
 func hasSubdir(root, dir string) (rel string, ok bool) {
 	const sep = string(filepath.Separator)
 	root = filepath.Clean(root)
@@ -266,7 +267,7 @@ func defaultGOPATH() string {
 	}
 	if home := os.Getenv(env); home != "" {
 		def := filepath.Join(home, "go")
-		if def == runtime.GOROOT() {
+		if filepath.Clean(def) == filepath.Clean(runtime.GOROOT()) {
 			// Don't set the default GOPATH to GOROOT,
 			// as that will trigger warnings from the go tool.
 			return ""
@@ -290,7 +291,8 @@ func defaultContext() Context {
 	// in all releases >= Go 1.x. Code that requires Go 1.x or later should
 	// say "+build go1.x", and code that should only be built before Go 1.x
 	// (perhaps it is the stub to use in that case) should say "+build !go1.x".
-	c.ReleaseTags = []string{"go1.1", "go1.2", "go1.3", "go1.4", "go1.5", "go1.6", "go1.7", "go1.8"}
+	// NOTE: If you add to this list, also update the doc comment in doc.go.
+	c.ReleaseTags = []string{"go1.1", "go1.2", "go1.3", "go1.4", "go1.5", "go1.6", "go1.7", "go1.8", "go1.9"}
 
 	env := os.Getenv("CGO_ENABLED")
 	if env == "" {
@@ -527,6 +529,10 @@ func (ctxt *Context) Import(path string, srcDir string, mode ImportMode) (*Packa
 		if !ctxt.isAbsPath(path) {
 			p.Dir = ctxt.joinPath(srcDir, path)
 		}
+		if !ctxt.isDir(p.Dir) {
+			// package was not found
+			return p, fmt.Errorf("cannot find package %q in:\n\t%s", path, p.Dir)
+		}
 		// Determine canonical import path, if any.
 		// Exclude results where the import path would include /testdata/.
 		inTestdata := func(sub string) bool {
@@ -716,7 +722,7 @@ Found:
 			p.InvalidGoFiles = append(p.InvalidGoFiles, name)
 		}
 
-		match, data, filename, err := ctxt.matchFile(p.Dir, name, true, allTags, &p.BinaryOnly)
+		match, data, filename, err := ctxt.matchFile(p.Dir, name, allTags, &p.BinaryOnly)
 		if err != nil {
 			badFile(err)
 			continue
@@ -1030,19 +1036,19 @@ func parseWord(data []byte) (word, rest []byte) {
 // MatchFile considers the name of the file and may use ctxt.OpenFile to
 // read some or all of the file's content.
 func (ctxt *Context) MatchFile(dir, name string) (match bool, err error) {
-	match, _, _, err = ctxt.matchFile(dir, name, false, nil, nil)
+	match, _, _, err = ctxt.matchFile(dir, name, nil, nil)
 	return
 }
 
 // matchFile determines whether the file with the given name in the given directory
 // should be included in the package being constructed.
 // It returns the data read from the file.
-// If returnImports is true and name denotes a Go program, matchFile reads
-// until the end of the imports (and returns that data) even though it only
-// considers text until the first non-comment.
+// If name denotes a Go program, matchFile reads until the end of the
+// imports (and returns that data) even though it only considers text
+// until the first non-comment.
 // If allTags is non-nil, matchFile records any encountered build tag
 // by setting allTags[tag] = true.
-func (ctxt *Context) matchFile(dir, name string, returnImports bool, allTags map[string]bool, binaryOnly *bool) (match bool, data []byte, filename string, err error) {
+func (ctxt *Context) matchFile(dir, name string, allTags map[string]bool, binaryOnly *bool) (match bool, data []byte, filename string, err error) {
 	if strings.HasPrefix(name, "_") ||
 		strings.HasPrefix(name, ".") {
 		return

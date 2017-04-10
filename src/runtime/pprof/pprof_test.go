@@ -4,22 +4,18 @@
 
 // +build !nacl
 
-package pprof_test
+package pprof
 
 import (
 	"bytes"
-	"compress/gzip"
 	"fmt"
-	"internal/pprof/profile"
 	"internal/testenv"
-	"io"
-	"io/ioutil"
 	"math/big"
 	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
-	. "runtime/pprof"
+	"runtime/pprof/internal/profile"
 	"strings"
 	"sync"
 	"testing"
@@ -71,14 +67,14 @@ func cpuHog2() {
 }
 
 func TestCPUProfile(t *testing.T) {
-	testCPUProfile(t, []string{"runtime/pprof_test.cpuHog1"}, func(dur time.Duration) {
+	testCPUProfile(t, []string{"runtime/pprof.cpuHog1"}, func(dur time.Duration) {
 		cpuHogger(cpuHog1, dur)
 	})
 }
 
 func TestCPUProfileMultithreaded(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(2))
-	testCPUProfile(t, []string{"runtime/pprof_test.cpuHog1", "runtime/pprof_test.cpuHog2"}, func(dur time.Duration) {
+	testCPUProfile(t, []string{"runtime/pprof.cpuHog1", "runtime/pprof.cpuHog2"}, func(dur time.Duration) {
 		c := make(chan int)
 		go func() {
 			cpuHogger(cpuHog1, dur)
@@ -124,8 +120,7 @@ func testCPUProfile(t *testing.T, need []string, f func(dur time.Duration)) {
 
 	const maxDuration = 5 * time.Second
 	// If we're running a long test, start with a long duration
-	// because some of the tests (e.g., TestStackBarrierProfiling)
-	// are trying to make sure something *doesn't* happen.
+	// for tests that try to make sure something *doesn't* happen.
 	duration := 5 * time.Second
 	if testing.Short() {
 		duration = 200 * time.Millisecond
@@ -175,25 +170,26 @@ func profileOk(t *testing.T, need []string, prof bytes.Buffer, duration time.Dur
 	// Check that profile is well formed and contains need.
 	have := make([]uintptr, len(need))
 	var samples uintptr
+	var buf bytes.Buffer
 	parseProfile(t, prof.Bytes(), func(count uintptr, stk []uintptr) {
+		fmt.Fprintf(&buf, "%d:", count)
 		samples += count
 		for _, pc := range stk {
+			fmt.Fprintf(&buf, " %#x", pc)
 			f := runtime.FuncForPC(pc)
 			if f == nil {
 				continue
 			}
+			fmt.Fprintf(&buf, "(%s)", f.Name())
 			for i, name := range need {
 				if strings.Contains(f.Name(), name) {
 					have[i] += count
 				}
 			}
-			if strings.Contains(f.Name(), "stackBarrier") {
-				// The runtime should have unwound this.
-				t.Fatalf("profile includes stackBarrier")
-			}
 		}
+		fmt.Fprintf(&buf, "\n")
 	})
-	t.Logf("total %d CPU profile samples collected", samples)
+	t.Logf("total %d CPU profile samples collected:\n%s", samples, buf.String())
 
 	if samples < 10 && runtime.GOOS == "windows" {
 		// On some windows machines we end up with
@@ -350,111 +346,6 @@ func TestMathBigDivide(t *testing.T) {
 	})
 }
 
-func slurpString(r io.Reader) string {
-	slurp, _ := ioutil.ReadAll(r)
-	return string(slurp)
-}
-
-func getLinuxKernelConfig() string {
-	if f, err := os.Open("/proc/config"); err == nil {
-		defer f.Close()
-		return slurpString(f)
-	}
-	if f, err := os.Open("/proc/config.gz"); err == nil {
-		defer f.Close()
-		r, err := gzip.NewReader(f)
-		if err != nil {
-			return ""
-		}
-		return slurpString(r)
-	}
-	if f, err := os.Open("/boot/config"); err == nil {
-		defer f.Close()
-		return slurpString(f)
-	}
-	uname, _ := exec.Command("uname", "-r").Output()
-	if len(uname) > 0 {
-		if f, err := os.Open("/boot/config-" + strings.TrimSpace(string(uname))); err == nil {
-			defer f.Close()
-			return slurpString(f)
-		}
-	}
-	return ""
-}
-
-func haveLinuxHiresTimers() bool {
-	config := getLinuxKernelConfig()
-	return strings.Contains(config, "CONFIG_HIGH_RES_TIMERS=y")
-}
-
-func TestStackBarrierProfiling(t *testing.T) {
-	if (runtime.GOOS == "linux" && runtime.GOARCH == "arm") ||
-		runtime.GOOS == "openbsd" ||
-		runtime.GOOS == "solaris" ||
-		runtime.GOOS == "dragonfly" ||
-		runtime.GOOS == "freebsd" {
-		// This test currently triggers a large number of
-		// usleep(100)s. These kernels/arches have poor
-		// resolution timers, so this gives up a whole
-		// scheduling quantum. On Linux and the BSDs (and
-		// probably Solaris), profiling signals are only
-		// generated when a process completes a whole
-		// scheduling quantum, so this test often gets zero
-		// profiling signals and fails.
-		t.Skipf("low resolution timers inhibit profiling signals (golang.org/issue/13405)")
-		return
-	}
-
-	if runtime.GOOS == "linux" && strings.HasPrefix(runtime.GOARCH, "mips") {
-		if !haveLinuxHiresTimers() {
-			t.Skipf("low resolution timers inhibit profiling signals (golang.org/issue/13405, golang.org/issue/17936)")
-		}
-	}
-
-	if !strings.Contains(os.Getenv("GODEBUG"), "gcstackbarrierall=1") {
-		// Re-execute this test with constant GC and stack
-		// barriers at every frame.
-		testenv.MustHaveExec(t)
-		if runtime.GOARCH == "ppc64" || runtime.GOARCH == "ppc64le" {
-			t.Skip("gcstackbarrierall doesn't work on ppc64")
-		}
-		args := []string{"-test.run=TestStackBarrierProfiling"}
-		if testing.Short() {
-			args = append(args, "-test.short")
-		}
-		cmd := exec.Command(os.Args[0], args...)
-		cmd.Env = append([]string{"GODEBUG=gcstackbarrierall=1", "GOGC=1", "GOTRACEBACK=system"}, os.Environ()...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("subprocess failed with %v:\n%s", err, out)
-		}
-		return
-	}
-
-	testCPUProfile(t, nil, func(duration time.Duration) {
-		// In long mode, we're likely to get one or two
-		// samples in stackBarrier.
-		t := time.After(duration)
-		for {
-			deepStack(1000)
-			select {
-			case <-t:
-				return
-			default:
-			}
-		}
-	})
-}
-
-var x []byte
-
-func deepStack(depth int) int {
-	if depth == 0 {
-		return 0
-	}
-	x = make([]byte, 1024)
-	return deepStack(depth-1) + 1
-}
-
 // Operating systems that are expected to fail the tests. See issue 13841.
 var badOS = map[string]bool{
 	"darwin":    true,
@@ -474,44 +365,44 @@ func TestBlockProfile(t *testing.T) {
 		{"chan recv", blockChanRecv, `
 [0-9]+ [0-9]+ @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime\.chanrecv1\+0x[0-9,a-f]+	.*/src/runtime/chan.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.blockChanRecv\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.blockChanRecv\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
 `},
 		{"chan send", blockChanSend, `
 [0-9]+ [0-9]+ @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime\.chansend1\+0x[0-9,a-f]+	.*/src/runtime/chan.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.blockChanSend\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.blockChanSend\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
 `},
 		{"chan close", blockChanClose, `
 [0-9]+ [0-9]+ @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime\.chanrecv1\+0x[0-9,a-f]+	.*/src/runtime/chan.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.blockChanClose\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.blockChanClose\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
 `},
 		{"select recv async", blockSelectRecvAsync, `
 [0-9]+ [0-9]+ @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime\.selectgo\+0x[0-9,a-f]+	.*/src/runtime/select.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.blockSelectRecvAsync\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.blockSelectRecvAsync\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
 `},
 		{"select send sync", blockSelectSendSync, `
 [0-9]+ [0-9]+ @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime\.selectgo\+0x[0-9,a-f]+	.*/src/runtime/select.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.blockSelectSendSync\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.blockSelectSendSync\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
 `},
 		{"mutex", blockMutex, `
 [0-9]+ [0-9]+ @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	sync\.\(\*Mutex\)\.Lock\+0x[0-9,a-f]+	.*/src/sync/mutex\.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.blockMutex\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.blockMutex\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
 `},
 		{"cond", blockCond, `
 [0-9]+ [0-9]+ @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	sync\.\(\*Cond\)\.Wait\+0x[0-9,a-f]+	.*/src/sync/cond\.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.blockCond\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
-#	0x[0-9,a-f]+	runtime/pprof_test\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.blockCond\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
+#	0x[0-9,a-f]+	runtime/pprof\.TestBlockProfile\+0x[0-9,a-f]+	.*/src/runtime/pprof/pprof_test.go:[0-9]+
 `},
 	}
 
@@ -624,6 +515,7 @@ func blockCond() {
 }
 
 func TestMutexProfile(t *testing.T) {
+	testenv.SkipFlaky(t, 19139)
 	old := runtime.SetMutexProfileFraction(1)
 	defer runtime.SetMutexProfileFraction(old)
 	if old != 0 {
@@ -653,7 +545,7 @@ func TestMutexProfile(t *testing.T) {
 	if ok, err := regexp.MatchString(r2, lines[3]); err != nil || !ok {
 		t.Errorf("%q didn't match %q", lines[3], r2)
 	}
-	r3 := "^#.*runtime/pprof_test.blockMutex.*$"
+	r3 := "^#.*runtime/pprof.blockMutex.*$"
 	if ok, err := regexp.MatchString(r3, lines[5]); err != nil || !ok {
 		t.Errorf("%q didn't match %q", lines[5], r3)
 	}
@@ -742,4 +634,23 @@ func containsCounts(prof *profile.Profile, counts []int64) bool {
 		}
 	}
 	return true
+}
+
+// Issue 18836.
+func TestEmptyCallStack(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	p := NewProfile("test18836")
+	p.Add("foo", 47674)
+	p.WriteTo(&buf, 1)
+	p.Remove("foo")
+	got := buf.String()
+	prefix := "test18836 profile: total 1\n"
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("got:\n\t%q\nwant prefix:\n\t%q\n", got, prefix)
+	}
+	lostevent := "lostProfileEvent"
+	if !strings.Contains(got, lostevent) {
+		t.Fatalf("got:\n\t%q\ndoes not contain:\n\t%q\n", got, lostevent)
+	}
 }

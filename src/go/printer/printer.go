@@ -58,6 +58,7 @@ type printer struct {
 	// Current state
 	output      []byte       // raw printer result
 	indent      int          // current indentation
+	level       int          // level == 0: outside composite literal; level > 0: inside composite literal
 	mode        pmode        // current printer mode
 	impliedSemi bool         // if set, a linebreak implies a semicolon
 	lastTok     token.Token  // last token printed (token.ILLEGAL if it's whitespace)
@@ -324,7 +325,7 @@ func (p *printer) writeString(pos token.Position, s string, isLit bool) {
 // after all pending comments, prev is the previous comment in
 // a group of comments (or nil), and tok is the next token.
 //
-func (p *printer) writeCommentPrefix(pos, next token.Position, prev, comment *ast.Comment, tok token.Token) {
+func (p *printer) writeCommentPrefix(pos, next token.Position, prev *ast.Comment, tok token.Token) {
 	if len(p.output) == 0 {
 		// the comment is the first item to be printed - don't write any whitespace
 		return
@@ -732,7 +733,7 @@ func (p *printer) intersperseComments(next token.Position, tok token.Token) (wro
 	var last *ast.Comment
 	for p.commentBefore(next) {
 		for _, c := range p.comment.List {
-			p.writeCommentPrefix(p.posFor(c.Pos()), next, last, c, tok)
+			p.writeCommentPrefix(p.posFor(c.Pos()), next, last, tok)
 			p.writeComment(c)
 			last = c
 		}
@@ -744,15 +745,19 @@ func (p *printer) intersperseComments(next token.Position, tok token.Token) (wro
 		// follows on the same line but is not a comma, and not a "closing"
 		// token immediately following its corresponding "opening" token,
 		// add an extra separator unless explicitly disabled. Use a blank
-		// as separator unless we have pending linebreaks and they are not
-		// disabled, in which case we want a linebreak (issue 15137).
+		// as separator unless we have pending linebreaks, they are not
+		// disabled, and we are outside a composite literal, in which case
+		// we want a linebreak (issue 15137).
+		// TODO(gri) This has become overly complicated. We should be able
+		// to track whether we're inside an expression or statement and
+		// use that information to decide more directly.
 		needsLinebreak := false
 		if p.mode&noExtraBlank == 0 &&
 			last.Text[1] == '*' && p.lineFor(last.Pos()) == next.Line &&
 			tok != token.COMMA &&
 			(tok != token.RPAREN || p.prevOpen == token.LPAREN) &&
 			(tok != token.RBRACK || p.prevOpen == token.LBRACK) {
-			if p.containsLinebreak() && p.mode&noExtraLinebreak == 0 {
+			if p.containsLinebreak() && p.mode&noExtraLinebreak == 0 && p.level == 0 {
 				needsLinebreak = true
 			} else {
 				p.writeByte(' ', 1)

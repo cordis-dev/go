@@ -36,7 +36,7 @@ type Block struct {
 // bytes) is also returned and this will always be smaller than the original
 // argument.
 func getLine(data []byte) (line, rest []byte) {
-	i := bytes.Index(data, []byte{'\n'})
+	i := bytes.IndexByte(data, '\n')
 	var j int
 	if i < 0 {
 		i = len(data)
@@ -106,7 +106,7 @@ func Decode(data []byte) (p *Block, rest []byte) {
 		}
 		line, next := getLine(rest)
 
-		i := bytes.Index(line, []byte{':'})
+		i := bytes.IndexByte(line, ':')
 		if i == -1 {
 			break
 		}
@@ -252,6 +252,7 @@ func writeHeader(out io.Writer, k, v string) error {
 	return err
 }
 
+// Encode writes the Block b to out.
 func Encode(out io.Writer, b *Block) error {
 	if _, err := out.Write(pemStart[1:]); err != nil {
 		return err
@@ -310,6 +311,10 @@ func Encode(out io.Writer, b *Block) error {
 	return err
 }
 
+// EncodeToMemory returns the Block b.
+//
+// EncodeToMemory will return an incomplete PEM encoded structure if an invalid block is given.
+// To catch errors, Blocks with user-supplied headers should use Encode.
 func EncodeToMemory(b *Block) []byte {
 	var buf bytes.Buffer
 	Encode(&buf, b)

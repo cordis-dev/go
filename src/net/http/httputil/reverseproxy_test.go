@@ -69,6 +69,7 @@ func TestReverseProxy(t *testing.T) {
 		w.WriteHeader(backendStatus)
 		w.Write([]byte(backendResponse))
 		w.Header().Set("X-Trailer", "trailer_value")
+		w.Header().Set(http.TrailerPrefix+"X-Unannounced-Trailer", "unannounced_trailer_value")
 	}))
 	defer backend.Close()
 	backendURL, err := url.Parse(backend.URL)
@@ -121,6 +122,9 @@ func TestReverseProxy(t *testing.T) {
 	}
 	if g, e := res.Trailer.Get("X-Trailer"), "trailer_value"; g != e {
 		t.Errorf("Trailer(X-Trailer) = %q ; want %q", g, e)
+	}
+	if g, e := res.Trailer.Get("X-Unannounced-Trailer"), "unannounced_trailer_value"; g != e {
+		t.Errorf("Trailer(X-Unannounced-Trailer) = %q ; want %q", g, e)
 	}
 
 	// Test that a backend failing to be reached or one which doesn't return
@@ -627,6 +631,35 @@ func TestReverseProxyModifyResponse(t *testing.T) {
 	}
 }
 
+// Issue 21255. Test ModifyResponse when an error from transport.RoundTrip
+// occurs, and that the proxy returns StatusOK.
+func TestReverseProxyModifyResponse_OnError(t *testing.T) {
+	// Always returns an error
+	errBackend := httptest.NewUnstartedServer(nil)
+	errBackend.Config.ErrorLog = log.New(ioutil.Discard, "", 0) // quiet for tests
+	defer errBackend.Close()
+
+	rpURL, _ := url.Parse(errBackend.URL)
+	rproxy := NewSingleHostReverseProxy(rpURL)
+	rproxy.ModifyResponse = func(resp *http.Response) error {
+		// Will be set for a non-nil error
+		resp.StatusCode = http.StatusOK
+		return nil
+	}
+
+	frontend := httptest.NewServer(rproxy)
+	defer frontend.Close()
+
+	resp, err := http.Get(frontend.URL)
+	if err != nil {
+		t.Fatalf("failed to reach proxy: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("err != nil: got res.StatusCode %d; expected %d", resp.StatusCode, http.StatusOK)
+	}
+	resp.Body.Close()
+}
+
 // Issue 16659: log errors from short read
 func TestReverseProxy_CopyBuffer(t *testing.T) {
 	backendServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -693,4 +726,119 @@ func BenchmarkServeHTTP(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		proxy.ServeHTTP(w, r)
 	}
+}
+
+func TestServeHTTPDeepCopy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello Gopher!"))
+	}))
+	defer backend.Close()
+	backendURL, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		before, after string
+	}
+
+	resultChan := make(chan result, 1)
+	proxyHandler := NewSingleHostReverseProxy(backendURL)
+	frontend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		before := r.URL.String()
+		proxyHandler.ServeHTTP(w, r)
+		after := r.URL.String()
+		resultChan <- result{before: before, after: after}
+	}))
+	defer frontend.Close()
+
+	want := result{before: "/", after: "/"}
+
+	res, err := frontend.Client().Get(frontend.URL)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	res.Body.Close()
+
+	got := <-resultChan
+	if got != want {
+		t.Errorf("got = %+v; want = %+v", got, want)
+	}
+}
+
+// Issue 18327: verify we always do a deep copy of the Request.Header map
+// before any mutations.
+func TestClonesRequestHeaders(t *testing.T) {
+	req, _ := http.NewRequest("GET", "http://foo.tld/", nil)
+	req.RemoteAddr = "1.2.3.4:56789"
+	rp := &ReverseProxy{
+		Director: func(req *http.Request) {
+			req.Header.Set("From-Director", "1")
+		},
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if v := req.Header.Get("From-Director"); v != "1" {
+				t.Errorf("From-Directory value = %q; want 1", v)
+			}
+			return nil, io.EOF
+		}),
+	}
+	rp.ServeHTTP(httptest.NewRecorder(), req)
+
+	if req.Header.Get("From-Director") == "1" {
+		t.Error("Director header mutation modified caller's request")
+	}
+	if req.Header.Get("X-Forwarded-For") != "" {
+		t.Error("X-Forward-For header mutation modified caller's request")
+	}
+
+}
+
+type roundTripperFunc func(req *http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func TestModifyResponseClosesBody(t *testing.T) {
+	req, _ := http.NewRequest("GET", "http://foo.tld/", nil)
+	req.RemoteAddr = "1.2.3.4:56789"
+	closeCheck := new(checkCloser)
+	logBuf := new(bytes.Buffer)
+	outErr := errors.New("ModifyResponse error")
+	rp := &ReverseProxy{
+		Director: func(req *http.Request) {},
+		Transport: &staticTransport{&http.Response{
+			StatusCode: 200,
+			Body:       closeCheck,
+		}},
+		ErrorLog: log.New(logBuf, "", 0),
+		ModifyResponse: func(*http.Response) error {
+			return outErr
+		},
+	}
+	rec := httptest.NewRecorder()
+	rp.ServeHTTP(rec, req)
+	res := rec.Result()
+	if g, e := res.StatusCode, http.StatusBadGateway; g != e {
+		t.Errorf("got res.StatusCode %d; expected %d", g, e)
+	}
+	if !closeCheck.closed {
+		t.Errorf("body should have been closed")
+	}
+	if g, e := logBuf.String(), outErr.Error(); !strings.Contains(g, e) {
+		t.Errorf("ErrorLog %q does not contain %q", g, e)
+	}
+}
+
+type checkCloser struct {
+	closed bool
+}
+
+func (cc *checkCloser) Close() error {
+	cc.closed = true
+	return nil
+}
+
+func (cc *checkCloser) Read(b []byte) (int, error) {
+	return len(b), nil
 }

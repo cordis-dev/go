@@ -22,11 +22,15 @@ import (
 
 func checkGdbEnvironment(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		t.Skip("gdb does not work on darwin")
-	}
-	if runtime.GOOS == "linux" && runtime.GOARCH == "ppc64" {
-		t.Skip("skipping gdb tests on linux/ppc64; see golang.org/issue/17366")
+	case "netbsd":
+		t.Skip("test times out on NetBSD for unknown reasons; issue 22893")
+	case "linux":
+		if runtime.GOARCH == "ppc64" {
+			t.Skip("skipping gdb tests on linux/ppc64; see golang.org/issue/17366")
+		}
 	}
 	if final := os.Getenv("GOROOT_FINAL"); final != "" && runtime.GOROOT() != final {
 		t.Skip("gdb test can fail with GOROOT_FINAL pending")
@@ -56,6 +60,10 @@ func checkGdbVersion(t *testing.T) {
 }
 
 func checkGdbPython(t *testing.T) {
+	if runtime.GOOS == "solaris" && testenv.Builder() != "solaris-amd64-smartosbuildlet" {
+		t.Skip("skipping gdb python tests on solaris; see golang.org/issue/20821")
+	}
+
 	cmd := exec.Command("gdb", "-nx", "-q", "--batch", "-iex", "python import sys; print('go gdb python support')")
 	out, err := cmd.CombinedOutput()
 
@@ -69,18 +77,20 @@ func checkGdbPython(t *testing.T) {
 
 const helloSource = `
 import "fmt"
+import "runtime"
 var gslice []string
 func main() {
-	mapvar := make(map[string]string,5)
+	mapvar := make(map[string]string, 13)
 	mapvar["abc"] = "def"
 	mapvar["ghi"] = "jkl"
 	strvar := "abc"
 	ptrvar := &strvar
 	slicevar := make([]string, 0, 16)
 	slicevar = append(slicevar, mapvar["abc"])
-	fmt.Println("hi") // line 12
-	_ = ptrvar
+	fmt.Println("hi") // line 13
+	runtime.KeepAlive(ptrvar)
 	gslice = slicevar
+	runtime.KeepAlive(mapvar)
 }
 `
 
@@ -89,16 +99,13 @@ func TestGdbPython(t *testing.T) {
 }
 
 func TestGdbPythonCgo(t *testing.T) {
-	if runtime.GOARCH == "mips" || runtime.GOARCH == "mipsle" {
+	if runtime.GOARCH == "mips" || runtime.GOARCH == "mipsle" || runtime.GOARCH == "mips64" {
 		testenv.SkipFlaky(t, 18784)
 	}
 	testGdbPython(t, true)
 }
 
 func testGdbPython(t *testing.T, cgo bool) {
-	if runtime.GOARCH == "mips64" {
-		testenv.SkipFlaky(t, 18173)
-	}
 	if cgo && !build.Default.CgoEnabled {
 		t.Skip("skipping because cgo is not enabled")
 	}
@@ -129,7 +136,7 @@ func testGdbPython(t *testing.T, cgo bool) {
 
 	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", "a.exe")
 	cmd.Dir = dir
-	out, err := testEnv(cmd).CombinedOutput()
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("building source %v\n%s", err, out)
 	}
@@ -155,6 +162,9 @@ func testGdbPython(t *testing.T, cgo bool) {
 		"-ex", "info locals",
 		"-ex", "echo END\n",
 		"-ex", "down", // back to fmt.Println (goroutine 2 below only works at bottom of stack.  TODO: fix that)
+		"-ex", "echo BEGIN goroutine 1 bt\n",
+		"-ex", "goroutine 1 bt",
+		"-ex", "echo END\n",
 		"-ex", "echo BEGIN goroutine 2 bt\n",
 		"-ex", "goroutine 2 bt",
 		"-ex", "echo END\n",
@@ -192,8 +202,10 @@ func testGdbPython(t *testing.T, cgo bool) {
 		t.Fatalf("info goroutines failed: %s", bl)
 	}
 
-	printMapvarRe := regexp.MustCompile(`\Q = map[string]string = {["abc"] = "def", ["ghi"] = "jkl"}\E$`)
-	if bl := blocks["print mapvar"]; !printMapvarRe.MatchString(bl) {
+	printMapvarRe1 := regexp.MustCompile(`\Q = map[string]string = {["abc"] = "def", ["ghi"] = "jkl"}\E$`)
+	printMapvarRe2 := regexp.MustCompile(`\Q = map[string]string = {["ghi"] = "jkl", ["abc"] = "def"}\E$`)
+	if bl := blocks["print mapvar"]; !printMapvarRe1.MatchString(bl) &&
+		!printMapvarRe2.MatchString(bl) {
 		t.Fatalf("print mapvar failed: %s", bl)
 	}
 
@@ -211,8 +223,13 @@ func testGdbPython(t *testing.T, cgo bool) {
 		t.Fatalf("info locals failed: %s", bl)
 	}
 
-	btGoroutineRe := regexp.MustCompile(`^#0\s+runtime.+at`)
-	if bl := blocks["goroutine 2 bt"]; !btGoroutineRe.MatchString(bl) {
+	btGoroutine1Re := regexp.MustCompile(`(?m)^#0\s+(0x[0-9a-f]+\s+in\s+)?fmt\.Println.+at`)
+	if bl := blocks["goroutine 1 bt"]; !btGoroutine1Re.MatchString(bl) {
+		t.Fatalf("goroutine 1 bt failed: %s", bl)
+	}
+
+	btGoroutine2Re := regexp.MustCompile(`(?m)^#0\s+(0x[0-9a-f]+\s+in\s+)?runtime.+at`)
+	if bl := blocks["goroutine 2 bt"]; !btGoroutine2Re.MatchString(bl) {
 		t.Fatalf("goroutine 2 bt failed: %s", bl)
 	}
 }
@@ -248,9 +265,6 @@ func TestGdbBacktrace(t *testing.T) {
 	if runtime.GOOS == "netbsd" {
 		testenv.SkipFlaky(t, 15603)
 	}
-	if runtime.GOARCH == "mips64" {
-		testenv.SkipFlaky(t, 18173)
-	}
 
 	t.Parallel()
 	checkGdbEnvironment(t)
@@ -270,7 +284,7 @@ func TestGdbBacktrace(t *testing.T) {
 	}
 	cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", "a.exe")
 	cmd.Dir = dir
-	out, err := testEnv(cmd).CombinedOutput()
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("building source %v\n%s", err, out)
 	}
@@ -322,10 +336,6 @@ func main() {
 // TestGdbAutotmpTypes ensures that types of autotmp variables appear in .debug_info
 // See bug #17830.
 func TestGdbAutotmpTypes(t *testing.T) {
-	if runtime.GOARCH == "mips64" {
-		testenv.SkipFlaky(t, 18173)
-	}
-
 	t.Parallel()
 	checkGdbEnvironment(t)
 	checkGdbVersion(t)
@@ -342,9 +352,9 @@ func TestGdbAutotmpTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create file: %v", err)
 	}
-	cmd := exec.Command(testenv.GoToolPath(t), "build", "-gcflags=-N -l", "-o", "a.exe")
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-gcflags=all=-N -l", "-o", "a.exe")
 	cmd.Dir = dir
-	out, err := testEnv(cmd).CombinedOutput()
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
 	if err != nil {
 		t.Fatalf("building source %v\n%s", err, out)
 	}
@@ -375,5 +385,64 @@ func TestGdbAutotmpTypes(t *testing.T) {
 			t.Errorf("could not find %s in 'info typrs astruct' output", name)
 			t.Fatalf("gdb output:\n%v", sgot)
 		}
+	}
+}
+
+const constsSource = `
+package main
+
+const aConstant int = 42
+const largeConstant uint64 = ^uint64(0)
+const minusOne int64 = -1
+
+func main() {
+	println("hello world")
+}
+`
+
+func TestGdbConst(t *testing.T) {
+	t.Parallel()
+	checkGdbEnvironment(t)
+	checkGdbVersion(t)
+
+	dir, err := ioutil.TempDir("", "go-build")
+	if err != nil {
+		t.Fatalf("failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	// Build the source code.
+	src := filepath.Join(dir, "main.go")
+	err = ioutil.WriteFile(src, []byte(constsSource), 0644)
+	if err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-gcflags=all=-N -l", "-o", "a.exe")
+	cmd.Dir = dir
+	out, err := testenv.CleanCmdEnv(cmd).CombinedOutput()
+	if err != nil {
+		t.Fatalf("building source %v\n%s", err, out)
+	}
+
+	// Execute gdb commands.
+	args := []string{"-nx", "-batch",
+		"-ex", "set startup-with-shell off",
+		"-ex", "break main.main",
+		"-ex", "run",
+		"-ex", "print main.aConstant",
+		"-ex", "print main.largeConstant",
+		"-ex", "print main.minusOne",
+		"-ex", "print 'runtime._MSpanInUse'",
+		"-ex", "print 'runtime._PageSize'",
+		filepath.Join(dir, "a.exe"),
+	}
+	got, _ := exec.Command("gdb", args...).CombinedOutput()
+
+	sgot := strings.Replace(string(got), "\r\n", "\n", -1)
+
+	t.Logf("output %q", sgot)
+
+	if !strings.Contains(sgot, "\n$1 = 42\n$2 = 18446744073709551615\n$3 = -1\n$4 = 1 '\\001'\n$5 = 8192") {
+		t.Fatalf("output mismatch")
 	}
 }

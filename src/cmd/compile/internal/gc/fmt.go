@@ -204,11 +204,6 @@ var goopnames = []string{
 	OSUB:      "-",
 	OSWITCH:   "switch",
 	OXOR:      "^",
-	OXFALL:    "fallthrough",
-}
-
-func (o Op) String() string {
-	return fmt.Sprint(o)
 }
 
 func (o Op) GoString() string {
@@ -227,28 +222,14 @@ func (o Op) format(s fmt.State, verb rune, mode fmtMode) {
 
 func (o Op) oconv(s fmt.State, flag FmtFlag, mode fmtMode) {
 	if flag&FmtSharp != 0 || mode != FDbg {
-		if o >= 0 && int(o) < len(goopnames) && goopnames[o] != "" {
+		if int(o) < len(goopnames) && goopnames[o] != "" {
 			fmt.Fprint(s, goopnames[o])
 			return
 		}
 	}
 
-	if o >= 0 && int(o) < len(opnames) && opnames[o] != "" {
-		fmt.Fprint(s, opnames[o])
-		return
-	}
-
-	fmt.Fprintf(s, "O-%d", int(o))
-}
-
-var classnames = []string{
-	"Pxxx",
-	"PEXTERN",
-	"PAUTO",
-	"PAUTOHEAP",
-	"PPARAM",
-	"PPARAMOUT",
-	"PFUNC",
+	// 'o.String()' instead of just 'o' to avoid infinite recursion
+	fmt.Fprint(s, o.String())
 }
 
 type (
@@ -447,12 +428,8 @@ func (n *Node) jconv(s fmt.State, flag FmtFlag) {
 		fmt.Fprintf(s, " x(%d)", n.Xoffset)
 	}
 
-	if n.Class != 0 {
-		if int(n.Class) < len(classnames) {
-			fmt.Fprintf(s, " class(%s)", classnames[n.Class])
-		} else {
-			fmt.Fprintf(s, " class(%d?)", n.Class)
-		}
+	if n.Class() != 0 {
+		fmt.Fprintf(s, " class(%v)", n.Class())
 	}
 
 	if n.Colas() {
@@ -489,8 +466,8 @@ func (n *Node) jconv(s fmt.State, flag FmtFlag) {
 		fmt.Fprintf(s, " ld(%d)", e.Loopdepth)
 	}
 
-	if c == 0 && n.Typecheck != 0 {
-		fmt.Fprintf(s, " tc(%d)", n.Typecheck)
+	if c == 0 && n.Typecheck() != 0 {
+		fmt.Fprintf(s, " tc(%d)", n.Typecheck())
 	}
 
 	if n.Isddd() {
@@ -501,8 +478,8 @@ func (n *Node) jconv(s fmt.State, flag FmtFlag) {
 		fmt.Fprintf(s, " implicit(%v)", n.Implicit())
 	}
 
-	if n.Embedded != 0 {
-		fmt.Fprintf(s, " embedded(%d)", n.Embedded)
+	if n.Embedded() {
+		fmt.Fprintf(s, " embedded")
 	}
 
 	if n.Addrtaken() {
@@ -520,11 +497,11 @@ func (n *Node) jconv(s fmt.State, flag FmtFlag) {
 	}
 
 	if c == 0 && n.HasCall() {
-		fmt.Fprintf(s, " hascall")
+		fmt.Fprint(s, " hascall")
 	}
 
-	if c == 0 && n.Used() {
-		fmt.Fprintf(s, " used(%v)", n.Used())
+	if c == 0 && n.Name != nil && n.Name.Used() {
+		fmt.Fprint(s, " used")
 	}
 }
 
@@ -814,7 +791,7 @@ func typefmt(t *types.Type, flag FmtFlag, mode fmtMode, depth int) string {
 		}
 		buf = append(buf, tmodeString(t.Params(), mode, depth)...)
 
-		switch t.Results().NumFields() {
+		switch t.NumResults() {
 		case 0:
 			// nothing to do
 
@@ -1080,11 +1057,7 @@ func (n *Node) stmtfmt(s fmt.State, mode fmtMode) {
 		}
 		mode.Fprintf(s, ": %v", n.Nbody)
 
-	case OBREAK,
-		OCONTINUE,
-		OGOTO,
-		OFALL,
-		OXFALL:
+	case OBREAK, OCONTINUE, OGOTO, OFALL:
 		if n.Left != nil {
 			mode.Fprintf(s, "%#v %v", n.Op, n.Left)
 		} else {
@@ -1219,7 +1192,6 @@ var opprec = []int{
 	OSELECT:     -1,
 	OSWITCH:     -1,
 	OXCASE:      -1,
-	OXFALL:      -1,
 
 	OEND: 0,
 }
@@ -1509,16 +1481,10 @@ func (n *Node) exprfmt(s fmt.State, prec int, mode fmtMode) {
 		}
 		mode.Fprintf(s, "make(%v)", n.Type)
 
+	case OPLUS, OMINUS, OADDR, OCOM, OIND, ONOT, ORECV:
 		// Unary
-	case OPLUS,
-		OMINUS,
-		OADDR,
-		OCOM,
-		OIND,
-		ONOT,
-		ORECV:
 		mode.Fprintf(s, "%#v", n.Op)
-		if n.Left.Op == n.Op {
+		if n.Left != nil && n.Left.Op == n.Op {
 			fmt.Fprint(s, " ")
 		}
 		n.Left.exprfmt(s, nprec+1, mode)
@@ -1549,13 +1515,11 @@ func (n *Node) exprfmt(s fmt.State, prec int, mode fmtMode) {
 		n.Right.exprfmt(s, nprec+1, mode)
 
 	case OADDSTR:
-		i := 0
-		for _, n1 := range n.List.Slice() {
+		for i, n1 := range n.List.Slice() {
 			if i != 0 {
 				fmt.Fprint(s, " + ")
 			}
 			n1.exprfmt(s, nprec, mode)
-			i++
 		}
 
 	case OCMPSTR, OCMPIFACE:
@@ -1760,7 +1724,11 @@ func fldconv(f *types.Field, flag FmtFlag, mode fmtMode, depth int) string {
 
 	var typ string
 	if f.Isddd() {
-		typ = "..." + tmodeString(f.Type.Elem(), mode, depth)
+		var et *types.Type
+		if f.Type != nil {
+			et = f.Type.Elem()
+		}
+		typ = "..." + tmodeString(et, mode, depth)
 	} else {
 		typ = tmodeString(f.Type, mode, depth)
 	}
@@ -1795,6 +1763,12 @@ func typeFormat(t *types.Type, s fmt.State, verb rune, mode fmtMode) {
 func tconv(t *types.Type, flag FmtFlag, mode fmtMode, depth int) string {
 	if t == nil {
 		return "<T>"
+	}
+	if t.Etype == types.TSSA {
+		return t.Extra.(string)
+	}
+	if t.Etype == types.TTUPLE {
+		return t.FieldType(0).String() + "," + t.FieldType(1).String()
 	}
 
 	if depth > 100 {

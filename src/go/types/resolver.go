@@ -111,6 +111,13 @@ func (check *Checker) declarePkgObj(ident *ast.Ident, obj Object, d *declInfo) {
 		return
 	}
 
+	// spec: "The main package must have package name main and declare
+	// a function main that takes no arguments and returns no value."
+	if ident.Name == "main" && check.pkg.name == "main" {
+		check.errorf(ident.Pos(), "cannot declare main - must be func")
+		return
+	}
+
 	check.declare(check.pkg.scope, ident, obj, token.NoPos)
 	check.objMap[obj] = d
 	obj.setOrder(uint32(len(check.objMap)))
@@ -156,6 +163,12 @@ func (check *Checker) importPackage(pos token.Pos, path, dir string) *Package {
 			if imp == nil && err == nil {
 				err = fmt.Errorf("Config.Importer.Import(%s) returned nil but no error", path)
 			}
+		}
+		// make sure we have a valid package name
+		// (errors here can only happen through manipulation of packages after creation)
+		if err == nil && imp != nil && (imp.name == "_" || imp.name == "") {
+			err = fmt.Errorf("invalid package name: %q", imp.name)
+			imp = nil // create fake package below
 		}
 		if err != nil {
 			check.errorf(pos, "could not import %s (%s)", path, err)
@@ -297,7 +310,6 @@ func (check *Checker) collectObjects() {
 									// via Config.Packages - may be dot-imported in
 									// another package!)
 									check.declare(fileScope, nil, obj, token.NoPos)
-									check.recordImplicit(s, obj)
 								}
 							}
 							// add position to set of dot-import positions for this file

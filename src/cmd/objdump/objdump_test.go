@@ -63,7 +63,7 @@ var x86Need = []string{
 }
 
 var armNeed = []string{
-	//"B.LS main.main(SB)", // TODO(rsc): restore; golang.org/issue/9021
+	"B main.main(SB)",
 	"BL main.Println(SB)",
 	"RET",
 }
@@ -148,6 +148,13 @@ func testDisasm(t *testing.T, printCode bool, flags ...string) {
 			ok = false
 		}
 	}
+	if goarch == "386" {
+		if strings.Contains(text, "(IP)") {
+			t.Errorf("disassembly contains PC-Relative addressing on 386")
+			ok = false
+		}
+	}
+
 	if !ok {
 		t.Logf("full disassembly:\n%s", text)
 	}
@@ -155,8 +162,6 @@ func testDisasm(t *testing.T, printCode bool, flags ...string) {
 
 func TestDisasm(t *testing.T) {
 	switch runtime.GOARCH {
-	case "arm64":
-		t.Skipf("skipping on %s, issue 10106", runtime.GOARCH)
 	case "mips", "mipsle", "mips64", "mips64le":
 		t.Skipf("skipping on %s, issue 12559", runtime.GOARCH)
 	case "s390x":
@@ -167,8 +172,6 @@ func TestDisasm(t *testing.T) {
 
 func TestDisasmCode(t *testing.T) {
 	switch runtime.GOARCH {
-	case "arm64":
-		t.Skipf("skipping on %s, issue 10106", runtime.GOARCH)
 	case "mips", "mipsle", "mips64", "mips64le":
 		t.Skipf("skipping on %s, issue 12559", runtime.GOARCH)
 	case "s390x":
@@ -185,8 +188,6 @@ func TestDisasmExtld(t *testing.T) {
 	switch runtime.GOARCH {
 	case "ppc64":
 		t.Skipf("skipping on %s, no support for external linking, issue 9038", runtime.GOARCH)
-	case "arm64":
-		t.Skipf("skipping on %s, issue 10106", runtime.GOARCH)
 	case "mips64", "mips64le", "mips", "mipsle":
 		t.Skipf("skipping on %s, issue 12559 and 12560", runtime.GOARCH)
 	case "s390x":
@@ -200,4 +201,53 @@ func TestDisasmExtld(t *testing.T) {
 		t.Skip("skipping because cgo is not enabled")
 	}
 	testDisasm(t, false, "-ldflags=-linkmode=external")
+}
+
+func TestDisasmGoobj(t *testing.T) {
+	switch runtime.GOARCH {
+	case "mips", "mipsle", "mips64", "mips64le":
+		t.Skipf("skipping on %s, issue 12559", runtime.GOARCH)
+	case "s390x":
+		t.Skipf("skipping on %s, issue 15255", runtime.GOARCH)
+	}
+
+	hello := filepath.Join(tmp, "hello.o")
+	args := []string{"tool", "compile", "-o", hello}
+	args = append(args, "testdata/fmthello.go")
+	out, err := exec.Command(testenv.GoToolPath(t), args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("go tool compile fmthello.go: %v\n%s", err, out)
+	}
+	need := []string{
+		"main(SB)",
+		"fmthello.go:6",
+	}
+
+	args = []string{
+		"-s", "main",
+		hello,
+	}
+
+	out, err = exec.Command(exe, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("objdump fmthello.o: %v\n%s", err, out)
+	}
+
+	text := string(out)
+	ok := true
+	for _, s := range need {
+		if !strings.Contains(text, s) {
+			t.Errorf("disassembly missing '%s'", s)
+			ok = false
+		}
+	}
+	if runtime.GOARCH == "386" {
+		if strings.Contains(text, "(IP)") {
+			t.Errorf("disassembly contains PC-Relative addressing on 386")
+			ok = false
+		}
+	}
+	if !ok {
+		t.Logf("full disassembly:\n%s", text)
+	}
 }

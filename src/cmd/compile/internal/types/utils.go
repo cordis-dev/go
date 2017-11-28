@@ -25,8 +25,8 @@ var (
 	Tconv       func(*Type, int, int, int) string // orig: func tconv(t *Type, flag FmtFlag, mode fmtMode, depth int) string
 	FormatSym   func(*Sym, fmt.State, rune, int)  // orig: func symFormat(sym *Sym, s fmt.State, verb rune, mode fmtMode)
 	FormatType  func(*Type, fmt.State, rune, int) // orig: func typeFormat(t *Type, s fmt.State, verb rune, mode fmtMode)
-	FieldName   func(*Field) string
 	TypeLinkSym func(*Type) *obj.LSym
+	Ctxt        *obj.Link
 
 	FmtLeft     int
 	FmtUnsigned int
@@ -75,50 +75,4 @@ func (f *bitset8) set(mask uint8, b bool) {
 	} else {
 		*(*uint8)(f) &^= mask
 	}
-}
-
-var etnames = []string{
-	Txxx:        "Txxx",
-	TINT:        "INT",
-	TUINT:       "UINT",
-	TINT8:       "INT8",
-	TUINT8:      "UINT8",
-	TINT16:      "INT16",
-	TUINT16:     "UINT16",
-	TINT32:      "INT32",
-	TUINT32:     "UINT32",
-	TINT64:      "INT64",
-	TUINT64:     "UINT64",
-	TUINTPTR:    "UINTPTR",
-	TFLOAT32:    "FLOAT32",
-	TFLOAT64:    "FLOAT64",
-	TCOMPLEX64:  "COMPLEX64",
-	TCOMPLEX128: "COMPLEX128",
-	TBOOL:       "BOOL",
-	TPTR32:      "PTR32",
-	TPTR64:      "PTR64",
-	TFUNC:       "FUNC",
-	TARRAY:      "ARRAY",
-	TSLICE:      "SLICE",
-	TSTRUCT:     "STRUCT",
-	TCHAN:       "CHAN",
-	TMAP:        "MAP",
-	TINTER:      "INTER",
-	TFORW:       "FORW",
-	TSTRING:     "STRING",
-	TUNSAFEPTR:  "TUNSAFEPTR",
-	TANY:        "ANY",
-	TIDEAL:      "TIDEAL",
-	TNIL:        "TNIL",
-	TBLANK:      "TBLANK",
-	TFUNCARGS:   "TFUNCARGS",
-	TCHANARGS:   "TCHANARGS",
-	TDDDFIELD:   "TDDDFIELD",
-}
-
-func (et EType) String() string {
-	if int(et) < len(etnames) && etnames[et] != "" {
-		return etnames[et]
-	}
-	return fmt.Sprintf("E-%d", et)
 }

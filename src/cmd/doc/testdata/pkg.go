@@ -80,6 +80,10 @@ func (ExportedType) unexportedMethod(a int) bool {
 	return true
 }
 
+type ExportedStructOneField struct {
+	OnlyField int // the only field
+}
+
 // Constants tied to ExportedType. (The type is a struct so this isn't valid Go,
 // but it parses and that's all we need.)
 const (
@@ -189,3 +193,8 @@ var LongLine = newLongLine(
 type T2 int
 
 type T1 = T2
+
+const (
+	Duplicate = iota
+	duplicate
+)

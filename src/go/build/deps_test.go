@@ -35,7 +35,7 @@ import (
 var pkgDeps = map[string][]string{
 	// L0 is the lowest level, core, nearly unavoidable packages.
 	"errors":                  {},
-	"io":                      {"errors", "sync"},
+	"io":                      {"errors", "sync", "sync/atomic"},
 	"runtime":                 {"unsafe", "runtime/internal/atomic", "runtime/internal/sys"},
 	"runtime/internal/sys":    {},
 	"runtime/internal/atomic": {"unsafe", "runtime/internal/sys"},
@@ -43,6 +43,7 @@ var pkgDeps = map[string][]string{
 	"sync":                    {"internal/race", "runtime", "sync/atomic", "unsafe"},
 	"sync/atomic":             {"unsafe"},
 	"unsafe":                  {},
+	"internal/cpu":            {"runtime"},
 
 	"L0": {
 		"errors",
@@ -52,11 +53,12 @@ var pkgDeps = map[string][]string{
 		"sync",
 		"sync/atomic",
 		"unsafe",
+		"internal/cpu",
 	},
 
 	// L1 adds simple functions and strings processing,
 	// but not Unicode tables.
-	"math":          {"unsafe"},
+	"math":          {"internal/cpu", "unsafe"},
 	"math/bits":     {},
 	"math/cmplx":    {"math"},
 	"math/rand":     {"L0", "math"},
@@ -99,7 +101,7 @@ var pkgDeps = map[string][]string{
 	"crypto/cipher":       {"L2", "crypto/subtle"},
 	"crypto/subtle":       {},
 	"encoding/base32":     {"L2"},
-	"encoding/base64":     {"L2"},
+	"encoding/base64":     {"L2", "encoding/binary"},
 	"encoding/binary":     {"L2", "reflect"},
 	"hash":                {"L2"}, // interfaces
 	"hash/adler32":        {"L2", "hash"},
@@ -152,9 +154,9 @@ var pkgDeps = map[string][]string{
 		"syscall",
 	},
 
-	"internal/poll": {"L0", "internal/race", "syscall", "time", "unicode/utf16", "unicode/utf8"},
+	"internal/poll": {"L0", "internal/race", "syscall", "time", "unicode/utf16", "unicode/utf8", "internal/syscall/windows"},
 	"os":            {"L1", "os", "syscall", "time", "internal/poll", "internal/syscall/windows"},
-	"path/filepath": {"L2", "os", "syscall"},
+	"path/filepath": {"L2", "os", "syscall", "internal/syscall/windows"},
 	"io/ioutil":     {"L2", "os", "path/filepath", "time"},
 	"os/exec":       {"L2", "os", "context", "path/filepath", "syscall"},
 	"os/signal":     {"L2", "os", "syscall"},
@@ -224,7 +226,7 @@ var pkgDeps = map[string][]string{
 	"go/types":                  {"L4", "GOPARSER", "container/heap", "go/constant"},
 
 	// One of a kind.
-	"archive/tar":              {"L4", "OS", "syscall"},
+	"archive/tar":              {"L4", "OS", "syscall", "os/user"},
 	"archive/zip":              {"L4", "OS", "compress/flate"},
 	"container/heap":           {"sort"},
 	"compress/bzip2":           {"L4"},
@@ -264,7 +266,7 @@ var pkgDeps = map[string][]string{
 	"math/big":                 {"L4"},
 	"mime":                     {"L4", "OS", "syscall", "internal/syscall/windows/registry"},
 	"mime/quotedprintable":     {"L4"},
-	"net/internal/socktest":    {"L4", "OS", "syscall"},
+	"net/internal/socktest":    {"L4", "OS", "syscall", "internal/syscall/windows"},
 	"net/url":                  {"L4"},
 	"plugin":                   {"L0", "OS", "CGO"},
 	"runtime/pprof/internal/profile": {"L4", "OS", "compress/gzip", "regexp"},
@@ -297,12 +299,15 @@ var pkgDeps = map[string][]string{
 	// Plan 9 alone needs io/ioutil and os.
 	"os/user": {"L4", "CGO", "io/ioutil", "os", "syscall"},
 
+	// Internal package used only for testing.
+	"os/signal/internal/pty": {"CGO", "fmt", "os"},
+
 	// Basic networking.
 	// Because net must be used by any package that wants to
 	// do networking portably, it must have a small dependency set: just L0+basic os.
 	"net": {
 		"L0", "CGO",
-		"context", "math/rand", "os", "sort", "syscall", "time",
+		"context", "math/rand", "os", "reflect", "sort", "syscall", "time",
 		"internal/nettrace", "internal/poll",
 		"internal/syscall/windows", "internal/singleflight", "internal/race",
 		"golang_org/x/net/lif", "golang_org/x/net/route",
@@ -375,9 +380,10 @@ var pkgDeps = map[string][]string{
 	},
 	"crypto/x509": {
 		"L4", "CRYPTO-MATH", "OS", "CGO",
-		"crypto/x509/pkix", "encoding/pem", "encoding/hex", "net", "syscall",
+		"crypto/x509/pkix", "encoding/pem", "encoding/hex", "net", "os/user", "syscall", "net/url",
+		"golang_org/x/crypto/cryptobyte", "golang_org/x/crypto/cryptobyte/asn1",
 	},
-	"crypto/x509/pkix": {"L4", "CRYPTO-MATH"},
+	"crypto/x509/pkix": {"L4", "CRYPTO-MATH", "encoding/hex"},
 
 	// Simple net+crypto-aware packages.
 	"mime/multipart": {"L4", "OS", "mime", "crypto/rand", "net/textproto", "mime/quotedprintable"},
@@ -410,7 +416,7 @@ var pkgDeps = map[string][]string{
 	"expvar":             {"L4", "OS", "encoding/json", "net/http"},
 	"net/http/cgi":       {"L4", "NET", "OS", "crypto/tls", "net/http", "regexp"},
 	"net/http/cookiejar": {"L4", "NET", "net/http"},
-	"net/http/fcgi":      {"L4", "NET", "OS", "net/http", "net/http/cgi"},
+	"net/http/fcgi":      {"L4", "NET", "OS", "context", "net/http", "net/http/cgi"},
 	"net/http/httptest":  {"L4", "NET", "OS", "crypto/tls", "flag", "net/http", "net/http/internal", "crypto/x509"},
 	"net/http/httputil":  {"L4", "NET", "OS", "context", "net/http", "net/http/internal"},
 	"net/http/pprof":     {"L4", "OS", "html/template", "net/http", "runtime/pprof", "runtime/trace"},

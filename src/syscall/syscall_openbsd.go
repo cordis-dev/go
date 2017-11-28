@@ -29,7 +29,6 @@ type SockaddrDatalink struct {
 func Syscall9(num, a1, a2, a3, a4, a5, a6, a7, a8, a9 uintptr) (r1, r2 uintptr, err Errno)
 
 func nametomib(name string) (mib []_C_int, err error) {
-
 	// Perform lookup via a binary search
 	left := 0
 	right := len(sysctlMib) - 1
@@ -99,6 +98,11 @@ func Getfsstat(buf []Statfs_t, flags int) (n int, err error) {
 	return
 }
 
+func setattrlistTimes(path string, times []Timespec) error {
+	// used on Darwin for UtimesNano
+	return ENOSYS
+}
+
 /*
  * Exposed directly
  */
@@ -112,7 +116,6 @@ func Getfsstat(buf []Statfs_t, flags int) (n int, err error) {
 //sys	Close(fd int) (err error)
 //sys	Dup(fd int) (nfd int, err error)
 //sys	Dup2(from int, to int) (err error)
-//sys	Exit(code int)
 //sys	Fchdir(fd int) (err error)
 //sys	Fchflags(fd int, flags int) (err error)
 //sys	Fchmod(fd int, mode uint32) (err error)
@@ -183,6 +186,7 @@ func Getfsstat(buf []Statfs_t, flags int) (n int, err error) {
 //sys	munmap(addr uintptr, length uintptr) (err error)
 //sys	readlen(fd int, buf *byte, nbuf int) (n int, err error) = SYS_READ
 //sys	writelen(fd int, buf *byte, nbuf int) (n int, err error) = SYS_WRITE
+//sys	utimensat(dirfd int, path string, times *[2]Timespec, flag int) (err error)
 
 /*
  * Unimplemented
@@ -278,6 +282,5 @@ func Getfsstat(buf []Statfs_t, flags int) (n int, err error) {
 // thrsleep
 // thrwakeup
 // unlinkat
-// utimensat
 // vfork
 // writev

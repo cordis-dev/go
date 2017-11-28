@@ -9,7 +9,9 @@ import (
 	"context"
 	"fmt"
 	"internal/testenv"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -63,7 +65,7 @@ func TestLookupGoogleSRV(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -99,7 +101,7 @@ func TestLookupGmailMX(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -131,7 +133,7 @@ func TestLookupGmailNS(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -164,7 +166,7 @@ func TestLookupGmailTXT(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -199,7 +201,7 @@ func TestLookupGooglePublicDNSAddr(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !supportsIPv6 || !*testIPv4 || !*testIPv6 {
+	if !supportsIPv4() || !supportsIPv6() || !*testIPv4 || !*testIPv6 {
 		t.Skip("both IPv4 and IPv6 are required")
 	}
 
@@ -220,7 +222,7 @@ func TestLookupGooglePublicDNSAddr(t *testing.T) {
 }
 
 func TestLookupIPv6LinkLocalAddr(t *testing.T) {
-	if !supportsIPv6 || !*testIPv6 {
+	if !supportsIPv6() || !*testIPv6 {
 		t.Skip("IPv6 is required")
 	}
 
@@ -256,7 +258,7 @@ func TestLookupCNAME(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -283,7 +285,7 @@ func TestLookupGoogleHost(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -303,6 +305,28 @@ func TestLookupGoogleHost(t *testing.T) {
 	}
 }
 
+func TestLookupLongTXT(t *testing.T) {
+	if runtime.GOOS == "plan9" {
+		t.Skip("skipping on plan9; see https://golang.org/issue/22857")
+	}
+	if testenv.Builder() == "" {
+		testenv.MustHaveExternalNetwork(t)
+	}
+
+	txts, err := LookupTXT("golang.rsc.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(txts)
+	want := []string{
+		strings.Repeat("abcdefghijklmnopqrstuvwxyABCDEFGHJIKLMNOPQRSTUVWXY", 10),
+		"gophers rule",
+	}
+	if !reflect.DeepEqual(txts, want) {
+		t.Fatalf("LookupTXT golang.rsc.io incorrect\nhave %q\nwant %q", txts, want)
+	}
+}
+
 var lookupGoogleIPTests = []struct {
 	name string
 }{
@@ -315,7 +339,7 @@ func TestLookupGoogleIP(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -450,7 +474,7 @@ func TestDNSFlood(t *testing.T) {
 }
 
 func TestLookupDotsWithLocalSource(t *testing.T) {
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 
@@ -499,7 +523,7 @@ func TestLookupDotsWithRemoteSource(t *testing.T) {
 		testenv.MustHaveExternalNetwork(t)
 	}
 
-	if !supportsIPv4 || !*testIPv4 {
+	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
 	}
 

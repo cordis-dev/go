@@ -4,19 +4,19 @@
 
 package strings
 
+import "internal/cpu"
+
 //go:noescape
 
 // indexShortStr returns the index of the first instance of c in s, or -1 if c is not present in s.
 // indexShortStr requires 2 <= len(c) <= shortStringLen
-func indexShortStr(s, c string) int  // ../runtime/asm_$GOARCH.s
-func supportAVX2() bool              // ../runtime/asm_$GOARCH.s
-func supportPOPCNT() bool            // ../runtime/asm_$GOARCH.s
-func countByte(s string, c byte) int // ../runtime/asm_$GOARCH.s
+func indexShortStr(s, c string) int  // ../runtime/asm_amd64.s
+func countByte(s string, c byte) int // ../runtime/asm_amd64.s
 
 var shortStringLen int
 
 func init() {
-	if supportAVX2() {
+	if cpu.X86.HasAVX2 {
 		shortStringLen = 63
 	} else {
 		shortStringLen = 31
@@ -75,31 +75,13 @@ func Index(s, substr string) int {
 		}
 		return -1
 	}
-	// Rabin-Karp search
-	hashss, pow := hashStr(substr)
-	var h uint32
-	for i := 0; i < n; i++ {
-		h = h*primeRK + uint32(s[i])
-	}
-	if h == hashss && s[:n] == substr {
-		return 0
-	}
-	for i := n; i < len(s); {
-		h *= primeRK
-		h += uint32(s[i])
-		h -= pow * uint32(s[i-n])
-		i++
-		if h == hashss && s[i-n:i] == substr {
-			return i - n
-		}
-	}
-	return -1
+	return indexRabinKarp(s, substr)
 }
 
 // Count counts the number of non-overlapping instances of substr in s.
 // If substr is an empty string, Count returns 1 + the number of Unicode code points in s.
 func Count(s, substr string) int {
-	if len(substr) == 1 && supportPOPCNT() {
+	if len(substr) == 1 && cpu.X86.HasPOPCNT {
 		return countByte(s, byte(substr[0]))
 	}
 	return countGeneric(s, substr)

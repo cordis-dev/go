@@ -5,7 +5,6 @@
 package types
 
 import (
-	"cmd/compile/internal/ssa"
 	"cmd/internal/obj"
 	"cmd/internal/src"
 	"fmt"
@@ -16,11 +15,13 @@ import (
 // TODO(gri) try to eliminate soon
 type Node struct{ _ int }
 
+//go:generate stringer -type EType -trimprefix T
+
 // EType describes a kind of type.
 type EType uint8
 
 const (
-	Txxx = iota
+	Txxx EType = iota
 
 	TINT8
 	TUINT8
@@ -68,6 +69,10 @@ const (
 
 	// pseudo-types for import/export
 	TDDDFIELD // wrapper: contained type is a ... field
+
+	// SSA backend types
+	TSSA   // internal types used by SSA backend (flags, memory, etc.)
+	TTUPLE // a pair of types, used by SSA backend
 
 	NTYPE
 )
@@ -159,22 +164,19 @@ type Type struct {
 }
 
 const (
-	typeLocal     = 1 << iota // created in this file
-	typeNotInHeap             // type cannot be heap allocated
+	typeNotInHeap = 1 << iota // type cannot be heap allocated
 	typeBroke                 // broken type definition
 	typeNoalg                 // suppress hash and eq algorithm generation
 	typeDeferwidth
 	typeRecur
 )
 
-func (t *Type) Local() bool      { return t.flags&typeLocal != 0 }
 func (t *Type) NotInHeap() bool  { return t.flags&typeNotInHeap != 0 }
 func (t *Type) Broke() bool      { return t.flags&typeBroke != 0 }
 func (t *Type) Noalg() bool      { return t.flags&typeNoalg != 0 }
 func (t *Type) Deferwidth() bool { return t.flags&typeDeferwidth != 0 }
 func (t *Type) Recur() bool      { return t.flags&typeRecur != 0 }
 
-func (t *Type) SetLocal(b bool)      { t.flags.set(typeLocal, b) }
 func (t *Type) SetNotInHeap(b bool)  { t.flags.set(typeNotInHeap, b) }
 func (t *Type) SetBroke(b bool)      { t.flags.set(typeBroke, b) }
 func (t *Type) SetNoalg(b bool)      { t.flags.set(typeNoalg, b) }
@@ -293,6 +295,12 @@ type Chan struct {
 func (t *Type) ChanType() *Chan {
 	t.wantEtype(TCHAN)
 	return t.Extra.(*Chan)
+}
+
+type Tuple struct {
+	first  *Type
+	second *Type
+	// Any tuple with a memory type must put that memory type second.
 }
 
 // Array contains Type fields specific to array types.
@@ -425,6 +433,8 @@ func New(et EType) *Type {
 		t.Extra = DDDField{}
 	case TCHAN:
 		t.Extra = new(Chan)
+	case TTUPLE:
+		t.Extra = new(Tuple)
 	}
 	return t
 }
@@ -469,6 +479,19 @@ func NewChan(elem *Type, dir ChanDir) *Type {
 	ct := t.ChanType()
 	ct.Elem = elem
 	ct.Dir = dir
+	return t
+}
+
+func NewTuple(t1, t2 *Type) *Type {
+	t := New(TTUPLE)
+	t.Extra.(*Tuple).first = t1
+	t.Extra.(*Tuple).second = t2
+	return t
+}
+
+func newSSA(name string) *Type {
+	t := New(TSSA)
+	t.Extra = name
 	return t
 }
 
@@ -561,28 +584,28 @@ func SubstAny(t *Type, types *[]*Type) *Type {
 	case TPTR32, TPTR64:
 		elem := SubstAny(t.Elem(), types)
 		if elem != t.Elem() {
-			t = t.Copy()
+			t = t.copy()
 			t.Extra = Ptr{Elem: elem}
 		}
 
 	case TARRAY:
 		elem := SubstAny(t.Elem(), types)
 		if elem != t.Elem() {
-			t = t.Copy()
+			t = t.copy()
 			t.Extra.(*Array).Elem = elem
 		}
 
 	case TSLICE:
 		elem := SubstAny(t.Elem(), types)
 		if elem != t.Elem() {
-			t = t.Copy()
+			t = t.copy()
 			t.Extra = Slice{Elem: elem}
 		}
 
 	case TCHAN:
 		elem := SubstAny(t.Elem(), types)
 		if elem != t.Elem() {
-			t = t.Copy()
+			t = t.copy()
 			t.Extra.(*Chan).Elem = elem
 		}
 
@@ -590,7 +613,7 @@ func SubstAny(t *Type, types *[]*Type) *Type {
 		key := SubstAny(t.Key(), types)
 		val := SubstAny(t.Val(), types)
 		if key != t.Key() || val != t.Val() {
-			t = t.Copy()
+			t = t.copy()
 			t.Extra.(*Map).Key = key
 			t.Extra.(*Map).Val = val
 		}
@@ -600,7 +623,7 @@ func SubstAny(t *Type, types *[]*Type) *Type {
 		params := SubstAny(t.Params(), types)
 		results := SubstAny(t.Results(), types)
 		if recvs != t.Recvs() || params != t.Params() || results != t.Results() {
-			t = t.Copy()
+			t = t.copy()
 			t.FuncType().Receiver = recvs
 			t.FuncType().Results = results
 			t.FuncType().Params = params
@@ -621,7 +644,7 @@ func SubstAny(t *Type, types *[]*Type) *Type {
 			nfs[i].Type = nft
 		}
 		if nfs != nil {
-			t = t.Copy()
+			t = t.copy()
 			t.SetFields(nfs)
 		}
 	}
@@ -629,8 +652,8 @@ func SubstAny(t *Type, types *[]*Type) *Type {
 	return t
 }
 
-// Copy returns a shallow copy of the Type.
-func (t *Type) Copy() *Type {
+// copy returns a shallow copy of the Type.
+func (t *Type) copy() *Type {
 	if t == nil {
 		return nil
 	}
@@ -658,6 +681,8 @@ func (t *Type) Copy() *Type {
 	case TARRAY:
 		x := *t.Extra.(*Array)
 		nt.Extra = &x
+	case TTUPLE, TSSA:
+		Fatalf("ssa types cannot be copied")
 	}
 	// TODO(mdempsky): Find out why this is necessary and explain.
 	if t.Orig == t {
@@ -680,6 +705,10 @@ func (t *Type) wantEtype(et EType) {
 func (t *Type) Recvs() *Type   { return t.FuncType().Receiver }
 func (t *Type) Params() *Type  { return t.FuncType().Params }
 func (t *Type) Results() *Type { return t.FuncType().Results }
+
+func (t *Type) NumRecvs() int   { return t.FuncType().Receiver.NumFields() }
+func (t *Type) NumParams() int  { return t.FuncType().Params.NumFields() }
+func (t *Type) NumResults() int { return t.FuncType().Results.NumFields() }
 
 // Recv returns the receiver of function type t, if any.
 func (t *Type) Recv() *Field {
@@ -857,6 +886,12 @@ func (t *Type) ArgWidth() int64 {
 }
 
 func (t *Type) Size() int64 {
+	if t.Etype == TSSA {
+		if t == TypeInt128 {
+			return 16
+		}
+		return 0
+	}
 	Dowidth(t)
 	return t.Width
 }
@@ -870,41 +905,47 @@ func (t *Type) SimpleString() string {
 	return t.Etype.String()
 }
 
+// Cmp is a comparison between values a and b.
+// -1 if a < b
+//  0 if a == b
+//  1 if a > b
+type Cmp int8
+
+const (
+	CMPlt = Cmp(-1)
+	CMPeq = Cmp(0)
+	CMPgt = Cmp(1)
+)
+
 // Compare compares types for purposes of the SSA back
-// end, returning an ssa.Cmp (one of CMPlt, CMPeq, CMPgt).
+// end, returning a Cmp (one of CMPlt, CMPeq, CMPgt).
 // The answers are correct for an optimizer
 // or code generator, but not necessarily typechecking.
 // The order chosen is arbitrary, only consistency and division
 // into equivalence classes (Types that compare CMPeq) matters.
-func (t *Type) Compare(u ssa.Type) ssa.Cmp {
-	x, ok := u.(*Type)
-	// ssa.CompilerType is smaller than gc.Type
-	// bare pointer equality is easy.
-	if !ok {
-		return ssa.CMPgt
-	}
+func (t *Type) Compare(x *Type) Cmp {
 	if x == t {
-		return ssa.CMPeq
+		return CMPeq
 	}
 	return t.cmp(x)
 }
 
-func cmpForNe(x bool) ssa.Cmp {
+func cmpForNe(x bool) Cmp {
 	if x {
-		return ssa.CMPlt
+		return CMPlt
 	}
-	return ssa.CMPgt
+	return CMPgt
 }
 
-func (r *Sym) cmpsym(s *Sym) ssa.Cmp {
+func (r *Sym) cmpsym(s *Sym) Cmp {
 	if r == s {
-		return ssa.CMPeq
+		return CMPeq
 	}
 	if r == nil {
-		return ssa.CMPlt
+		return CMPlt
 	}
 	if s == nil {
-		return ssa.CMPgt
+		return CMPgt
 	}
 	// Fast sort, not pretty sort
 	if len(r.Name) != len(s.Name) {
@@ -921,28 +962,28 @@ func (r *Sym) cmpsym(s *Sym) ssa.Cmp {
 	if r.Name != s.Name {
 		return cmpForNe(r.Name < s.Name)
 	}
-	return ssa.CMPeq
+	return CMPeq
 }
 
-// cmp compares two *Types t and x, returning ssa.CMPlt,
-// ssa.CMPeq, ssa.CMPgt as t<x, t==x, t>x, for an arbitrary
+// cmp compares two *Types t and x, returning CMPlt,
+// CMPeq, CMPgt as t<x, t==x, t>x, for an arbitrary
 // and optimizer-centric notion of comparison.
 // TODO(josharian): make this safe for recursive interface types
 // and use in signatlist sorting. See issue 19869.
-func (t *Type) cmp(x *Type) ssa.Cmp {
+func (t *Type) cmp(x *Type) Cmp {
 	// This follows the structure of eqtype in subr.go
 	// with two exceptions.
 	// 1. Symbols are compared more carefully because a <,=,> result is desired.
 	// 2. Maps are treated specially to avoid endless recursion -- maps
 	//    contain an internal data type not expressible in Go source code.
 	if t == x {
-		return ssa.CMPeq
+		return CMPeq
 	}
 	if t == nil {
-		return ssa.CMPlt
+		return CMPlt
 	}
 	if x == nil {
-		return ssa.CMPgt
+		return CMPgt
 	}
 
 	if t.Etype != x.Etype {
@@ -955,17 +996,17 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 		switch t.Etype {
 		case TUINT8:
 			if (t == Types[TUINT8] || t == Bytetype) && (x == Types[TUINT8] || x == Bytetype) {
-				return ssa.CMPeq
+				return CMPeq
 			}
 
 		case TINT32:
 			if (t == Types[Runetype.Etype] || t == Runetype) && (x == Types[Runetype.Etype] || x == Runetype) {
-				return ssa.CMPeq
+				return CMPeq
 			}
 		}
 	}
 
-	if c := t.Sym.cmpsym(x.Sym); c != ssa.CMPeq {
+	if c := t.Sym.cmpsym(x.Sym); c != CMPeq {
 		return c
 	}
 
@@ -974,19 +1015,43 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 		if t.Vargen != x.Vargen {
 			return cmpForNe(t.Vargen < x.Vargen)
 		}
-		return ssa.CMPeq
+		return CMPeq
 	}
 	// both syms nil, look at structure below.
 
 	switch t.Etype {
 	case TBOOL, TFLOAT32, TFLOAT64, TCOMPLEX64, TCOMPLEX128, TUNSAFEPTR, TUINTPTR,
 		TINT8, TINT16, TINT32, TINT64, TINT, TUINT8, TUINT16, TUINT32, TUINT64, TUINT:
-		return ssa.CMPeq
-	}
+		return CMPeq
 
-	switch t.Etype {
+	case TSSA:
+		tname := t.Extra.(string)
+		xname := t.Extra.(string)
+		// desire fast sorting, not pretty sorting.
+		if len(tname) == len(xname) {
+			if tname == xname {
+				return CMPeq
+			}
+			if tname < xname {
+				return CMPlt
+			}
+			return CMPgt
+		}
+		if len(tname) > len(xname) {
+			return CMPgt
+		}
+		return CMPlt
+
+	case TTUPLE:
+		xtup := x.Extra.(*Tuple)
+		ttup := t.Extra.(*Tuple)
+		if c := ttup.first.Compare(xtup.first); c != CMPeq {
+			return c
+		}
+		return ttup.second.Compare(xtup.second)
+
 	case TMAP:
-		if c := t.Key().cmp(x.Key()); c != ssa.CMPeq {
+		if c := t.Key().cmp(x.Key()); c != CMPeq {
 			return c
 		}
 		return t.Val().cmp(x.Val())
@@ -998,20 +1063,20 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 	case TSTRUCT:
 		if t.StructType().Map == nil {
 			if x.StructType().Map != nil {
-				return ssa.CMPlt // nil < non-nil
+				return CMPlt // nil < non-nil
 			}
 			// to the fallthrough
 		} else if x.StructType().Map == nil {
-			return ssa.CMPgt // nil > non-nil
+			return CMPgt // nil > non-nil
 		} else if t.StructType().Map.MapType().Bucket == t {
 			// Both have non-nil Map
 			// Special case for Maps which include a recursive type where the recursion is not broken with a named type
 			if x.StructType().Map.MapType().Bucket != x {
-				return ssa.CMPlt // bucket maps are least
+				return CMPlt // bucket maps are least
 			}
 			return t.StructType().Map.cmp(x.StructType().Map)
 		} else if x.StructType().Map.MapType().Bucket == x {
-			return ssa.CMPgt // bucket maps are least
+			return CMPgt // bucket maps are least
 		} // If t != t.Map.Bucket, fall through to general case
 
 		tfs := t.FieldSlice()
@@ -1024,34 +1089,34 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 			if t1.Note != x1.Note {
 				return cmpForNe(t1.Note < x1.Note)
 			}
-			if c := t1.Sym.cmpsym(x1.Sym); c != ssa.CMPeq {
+			if c := t1.Sym.cmpsym(x1.Sym); c != CMPeq {
 				return c
 			}
-			if c := t1.Type.cmp(x1.Type); c != ssa.CMPeq {
+			if c := t1.Type.cmp(x1.Type); c != CMPeq {
 				return c
 			}
 		}
 		if len(tfs) != len(xfs) {
 			return cmpForNe(len(tfs) < len(xfs))
 		}
-		return ssa.CMPeq
+		return CMPeq
 
 	case TINTER:
 		tfs := t.FieldSlice()
 		xfs := x.FieldSlice()
 		for i := 0; i < len(tfs) && i < len(xfs); i++ {
 			t1, x1 := tfs[i], xfs[i]
-			if c := t1.Sym.cmpsym(x1.Sym); c != ssa.CMPeq {
+			if c := t1.Sym.cmpsym(x1.Sym); c != CMPeq {
 				return c
 			}
-			if c := t1.Type.cmp(x1.Type); c != ssa.CMPeq {
+			if c := t1.Type.cmp(x1.Type); c != CMPeq {
 				return c
 			}
 		}
 		if len(tfs) != len(xfs) {
 			return cmpForNe(len(tfs) < len(xfs))
 		}
-		return ssa.CMPeq
+		return CMPeq
 
 	case TFUNC:
 		for _, f := range RecvsParamsResults {
@@ -1064,7 +1129,7 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 				if ta.Isddd() != tb.Isddd() {
 					return cmpForNe(!ta.Isddd())
 				}
-				if c := ta.Type.cmp(tb.Type); c != ssa.CMPeq {
+				if c := ta.Type.cmp(tb.Type); c != CMPeq {
 					return c
 				}
 			}
@@ -1072,7 +1137,7 @@ func (t *Type) cmp(x *Type) ssa.Cmp {
 				return cmpForNe(len(tfs) < len(xfs))
 			}
 		}
-		return ssa.CMPeq
+		return CMPeq
 
 	case TARRAY:
 		if t.NumElem() != x.NumElem() {
@@ -1202,26 +1267,36 @@ func (t *Type) IsEmptyInterface() bool {
 	return t.IsInterface() && t.NumFields() == 0
 }
 
-func (t *Type) ElemType() ssa.Type {
+func (t *Type) ElemType() *Type {
 	// TODO(josharian): If Type ever moves to a shared
 	// internal package, remove this silly wrapper.
 	return t.Elem()
 }
-func (t *Type) PtrTo() ssa.Type {
+func (t *Type) PtrTo() *Type {
 	return NewPtr(t)
 }
 
 func (t *Type) NumFields() int {
 	return t.Fields().Len()
 }
-func (t *Type) FieldType(i int) ssa.Type {
+func (t *Type) FieldType(i int) *Type {
+	if t.Etype == TTUPLE {
+		switch i {
+		case 0:
+			return t.Extra.(*Tuple).first
+		case 1:
+			return t.Extra.(*Tuple).second
+		default:
+			panic("bad tuple index")
+		}
+	}
 	return t.Field(i).Type
 }
 func (t *Type) FieldOff(i int) int64 {
 	return t.Field(i).Offset
 }
 func (t *Type) FieldName(i int) string {
-	return FieldName(t.Field(i))
+	return t.Field(i).Sym.Name
 }
 
 func (t *Type) NumElem() int64 {
@@ -1245,6 +1320,23 @@ func (t *Type) SetNumElem(n int64) {
 	at.Bound = n
 }
 
+func (t *Type) NumComponents() int64 {
+	switch t.Etype {
+	case TSTRUCT:
+		if t.IsFuncArgStruct() {
+			Fatalf("NumComponents func arg struct")
+		}
+		var n int64
+		for _, f := range t.FieldSlice() {
+			n += f.Type.NumComponents()
+		}
+		return n
+	case TARRAY:
+		return t.NumElem() * t.Elem().NumComponents()
+	}
+	return 1
+}
+
 // ChanDir returns the direction of a channel type t.
 // The direction will be one of Crecv, Csend, or Cboth.
 func (t *Type) ChanDir() ChanDir {
@@ -1252,10 +1344,12 @@ func (t *Type) ChanDir() ChanDir {
 	return t.Extra.(*Chan).Dir
 }
 
-func (t *Type) IsMemory() bool { return false }
-func (t *Type) IsFlags() bool  { return false }
-func (t *Type) IsVoid() bool   { return false }
-func (t *Type) IsTuple() bool  { return false }
+func (t *Type) IsMemory() bool {
+	return t == TypeMem || t.Etype == TTUPLE && t.Extra.(*Tuple).second == TypeMem
+}
+func (t *Type) IsFlags() bool { return t == TypeFlags }
+func (t *Type) IsVoid() bool  { return t == TypeVoid }
+func (t *Type) IsTuple() bool { return t.Etype == TTUPLE }
 
 // IsUntyped reports whether t is an untyped type.
 func (t *Type) IsUntyped() bool {
@@ -1272,7 +1366,14 @@ func (t *Type) IsUntyped() bool {
 	return false
 }
 
+// TODO(austin): We probably only need HasHeapPointer. See
+// golang.org/cl/73412 for discussion.
+
 func Haspointers(t *Type) bool {
+	return Haspointers1(t, false)
+}
+
+func Haspointers1(t *Type, ignoreNotInHeap bool) bool {
 	switch t.Etype {
 	case TINT, TUINT, TINT8, TUINT8, TINT16, TUINT16, TINT32, TUINT32, TINT64,
 		TUINT64, TUINTPTR, TFLOAT32, TFLOAT64, TCOMPLEX64, TCOMPLEX128, TBOOL:
@@ -1282,28 +1383,28 @@ func Haspointers(t *Type) bool {
 		if t.NumElem() == 0 { // empty array has no pointers
 			return false
 		}
-		return Haspointers(t.Elem())
+		return Haspointers1(t.Elem(), ignoreNotInHeap)
 
 	case TSTRUCT:
 		for _, t1 := range t.Fields().Slice() {
-			if Haspointers(t1.Type) {
+			if Haspointers1(t1.Type, ignoreNotInHeap) {
 				return true
 			}
 		}
 		return false
+
+	case TPTR32, TPTR64, TSLICE:
+		return !(ignoreNotInHeap && t.Elem().NotInHeap())
 	}
 
 	return true
 }
 
-// HasPointer returns whether t contains heap pointer.
-// This is used for write barrier insertion, so we ignore
+// HasHeapPointer returns whether t contains a heap pointer.
+// This is used for write barrier insertion, so it ignores
 // pointers to go:notinheap types.
-func (t *Type) HasPointer() bool {
-	if t.IsPtr() && t.Elem().NotInHeap() {
-		return false
-	}
-	return Haspointers(t)
+func (t *Type) HasHeapPointer() bool {
+	return Haspointers1(t, true)
 }
 
 func (t *Type) Symbol() *obj.LSym {
@@ -1322,3 +1423,21 @@ func (t *Type) Tie() byte {
 	}
 	return 'T'
 }
+
+var recvType *Type
+
+// FakeRecvType returns the singleton type used for interface method receivers.
+func FakeRecvType() *Type {
+	if recvType == nil {
+		recvType = NewPtr(New(TSTRUCT))
+	}
+	return recvType
+}
+
+var (
+	TypeInvalid = newSSA("invalid")
+	TypeMem     = newSSA("mem")
+	TypeFlags   = newSSA("flags")
+	TypeVoid    = newSSA("void")
+	TypeInt128  = newSSA("int128")
+)

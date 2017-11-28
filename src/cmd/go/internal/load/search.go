@@ -67,25 +67,39 @@ func MatchPackages(pattern string) []string {
 			root += "cmd" + string(filepath.Separator)
 		}
 		filepath.Walk(root, func(path string, fi os.FileInfo, err error) error {
-			if err != nil || !fi.IsDir() || path == src {
+			if err != nil || path == src {
 				return nil
 			}
 
+			want := true
 			// Avoid .foo, _foo, and testdata directory trees.
 			_, elem := filepath.Split(path)
 			if strings.HasPrefix(elem, ".") || strings.HasPrefix(elem, "_") || elem == "testdata" {
-				return filepath.SkipDir
+				want = false
 			}
 
 			name := filepath.ToSlash(path[len(src):])
 			if pattern == "std" && (!isStandardImportPath(name) || name == "cmd") {
 				// The name "std" is only the standard library.
 				// If the name is cmd, it's the root of the command tree.
-				return filepath.SkipDir
+				want = false
 			}
 			if !treeCanMatch(name) {
+				want = false
+			}
+
+			if !fi.IsDir() {
+				if fi.Mode()&os.ModeSymlink != 0 && want {
+					if target, err := os.Stat(path); err == nil && target.IsDir() {
+						fmt.Fprintf(os.Stderr, "warning: ignoring symlink %s\n", path)
+					}
+				}
+				return nil
+			}
+			if !want {
 				return filepath.SkipDir
 			}
+
 			if have[name] {
 				return nil
 			}
@@ -252,6 +266,50 @@ func matchPattern(pattern string) func(name string) bool {
 	}
 }
 
+// MatchPackage(pattern, cwd)(p) reports whether package p matches pattern in the working directory cwd.
+func MatchPackage(pattern, cwd string) func(*Package) bool {
+	switch {
+	case strings.HasPrefix(pattern, "./") || strings.HasPrefix(pattern, "../") || pattern == "." || pattern == "..":
+		// Split pattern into leading pattern-free directory path
+		// (including all . and .. elements) and the final pattern.
+		var dir string
+		i := strings.Index(pattern, "...")
+		if i < 0 {
+			dir, pattern = pattern, ""
+		} else {
+			j := strings.LastIndex(pattern[:i], "/")
+			dir, pattern = pattern[:j], pattern[j+1:]
+		}
+		dir = filepath.Join(cwd, dir)
+		if pattern == "" {
+			return func(p *Package) bool { return p.Dir == dir }
+		}
+		matchPath := matchPattern(pattern)
+		return func(p *Package) bool {
+			// Compute relative path to dir and see if it matches the pattern.
+			rel, err := filepath.Rel(dir, p.Dir)
+			if err != nil {
+				// Cannot make relative - e.g. different drive letters on Windows.
+				return false
+			}
+			rel = filepath.ToSlash(rel)
+			if rel == ".." || strings.HasPrefix(rel, "../") {
+				return false
+			}
+			return matchPath(rel)
+		}
+	case pattern == "all":
+		return func(p *Package) bool { return true }
+	case pattern == "std":
+		return func(p *Package) bool { return p.Standard }
+	case pattern == "cmd":
+		return func(p *Package) bool { return p.Standard && strings.HasPrefix(p.ImportPath, "cmd/") }
+	default:
+		matchPath := matchPattern(pattern)
+		return func(p *Package) bool { return matchPath(p.ImportPath) }
+	}
+}
+
 // replaceVendor returns the result of replacing
 // non-trailing vendor path elements in x with repl.
 func replaceVendor(x, repl string) string {
@@ -288,6 +346,9 @@ func ImportPaths(args []string) []string {
 // ImportPathsNoDotExpansion returns the import paths to use for the given
 // command line, but it does no ... expansion.
 func ImportPathsNoDotExpansion(args []string) []string {
+	if cmdlineMatchers == nil {
+		SetCmdlinePatterns(args)
+	}
 	if len(args) == 0 {
 		return []string{"."}
 	}
@@ -318,7 +379,7 @@ func ImportPathsNoDotExpansion(args []string) []string {
 	return out
 }
 
-// isMetaPackage checks if name is a reserved package name that expands to multiple packages.
+// IsMetaPackage checks if name is a reserved package name that expands to multiple packages.
 func IsMetaPackage(name string) bool {
 	return name == "std" || name == "cmd" || name == "all"
 }

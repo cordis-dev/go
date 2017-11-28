@@ -12,7 +12,7 @@ import (
 )
 
 // Ctype describes the constant kind of an "ideal" (untyped) constant.
-type Ctype int8
+type Ctype uint8
 
 const (
 	CTxxx Ctype = iota
@@ -138,26 +138,58 @@ func truncfltlit(oldv *Mpflt, t *types.Type) *Mpflt {
 		return oldv
 	}
 
-	var v Val
-	v.U = oldv
-	overflow(v, t)
+	if overflow(Val{oldv}, t) {
+		// If there was overflow, simply continuing would set the
+		// value to Inf which in turn would lead to spurious follow-on
+		// errors. Avoid this by returning the existing value.
+		return oldv
+	}
 
 	fv := newMpflt()
-	fv.Set(oldv)
 
 	// convert large precision literal floating
 	// into limited precision (float64 or float32)
 	switch t.Etype {
+	case types.TFLOAT32:
+		fv.SetFloat64(oldv.Float32())
 	case types.TFLOAT64:
-		d := fv.Float64()
-		fv.SetFloat64(d)
-
-	case TFLOAT32:
-		d := fv.Float32()
-		fv.SetFloat64(d)
+		fv.SetFloat64(oldv.Float64())
+	default:
+		Fatalf("truncfltlit: unexpected Etype %v", t.Etype)
 	}
 
 	return fv
+}
+
+// truncate Real and Imag parts of Mpcplx to 32-bit or 64-bit
+// precision, according to type; return truncated value. In case of
+// overflow, calls yyerror but does not truncate the input value.
+func trunccmplxlit(oldv *Mpcplx, t *types.Type) *Mpcplx {
+	if t == nil {
+		return oldv
+	}
+
+	if overflow(Val{oldv}, t) {
+		// If there was overflow, simply continuing would set the
+		// value to Inf which in turn would lead to spurious follow-on
+		// errors. Avoid this by returning the existing value.
+		return oldv
+	}
+
+	cv := newMpcmplx()
+
+	switch t.Etype {
+	case types.TCOMPLEX64:
+		cv.Real.SetFloat64(oldv.Real.Float32())
+		cv.Imag.SetFloat64(oldv.Imag.Float32())
+	case types.TCOMPLEX128:
+		cv.Real.SetFloat64(oldv.Real.Float64())
+		cv.Imag.SetFloat64(oldv.Imag.Float64())
+	default:
+		Fatalf("trunccplxlit: unexpected Etype %v", t.Etype)
+	}
+
+	return cv
 }
 
 // canReuseNode indicates whether it is known to be safe
@@ -215,7 +247,7 @@ func convlit1(n *Node, t *types.Type, explicit bool, reuse canReuseNode) *Node {
 
 		return n
 
-		// target is invalid type for a constant?  leave alone.
+		// target is invalid type for a constant? leave alone.
 	case OLITERAL:
 		if !okforconst[t.Etype] && n.Type.Etype != TNIL {
 			return defaultlitreuse(n, nil, reuse)
@@ -265,7 +297,7 @@ func convlit1(n *Node, t *types.Type, explicit bool, reuse canReuseNode) *Node {
 
 	ct := consttype(n)
 	var et types.EType
-	if ct < 0 {
+	if ct == 0 {
 		goto bad
 	}
 
@@ -361,7 +393,7 @@ func convlit1(n *Node, t *types.Type, explicit bool, reuse canReuseNode) *Node {
 				fallthrough
 
 			case CTCPLX:
-				overflow(n.Val(), t)
+				n.SetVal(Val{trunccmplxlit(n.Val().U.(*Mpcplx), t)})
 			}
 		} else if et == types.TSTRING && (ct == CTINT || ct == CTRUNE) && explicit {
 			n.SetVal(tostr(n.Val()))
@@ -376,7 +408,7 @@ func convlit1(n *Node, t *types.Type, explicit bool, reuse canReuseNode) *Node {
 bad:
 	if !n.Diag() {
 		if !t.Broke() {
-			yyerror("cannot convert %v to type %v", n, t)
+			yyerror("cannot convert %L to type %v", n, t)
 		}
 		n.SetDiag(true)
 	}
@@ -519,21 +551,25 @@ func doesoverflow(v Val, t *types.Type) bool {
 	return false
 }
 
-func overflow(v Val, t *types.Type) {
+func overflow(v Val, t *types.Type) bool {
 	// v has already been converted
 	// to appropriate form for t.
 	if t == nil || t.Etype == TIDEAL {
-		return
+		return false
 	}
 
 	// Only uintptrs may be converted to unsafe.Pointer, which cannot overflow.
 	if t.Etype == TUNSAFEPTR {
-		return
+		return false
 	}
 
 	if doesoverflow(v, t) {
 		yyerror("constant %v overflows %v", v, t)
+		return true
 	}
+
+	return false
+
 }
 
 func tostr(v Val) Val {
@@ -555,7 +591,7 @@ func tostr(v Val) Val {
 
 func consttype(n *Node) Ctype {
 	if n == nil || n.Op != OLITERAL {
-		return -1
+		return 0
 	}
 	return n.Val().Ctype()
 }
@@ -657,7 +693,7 @@ func evconst(n *Node) {
 	if nl == nil || nl.Type == nil {
 		return
 	}
-	if consttype(nl) < 0 {
+	if consttype(nl) == 0 {
 		return
 	}
 	wl := nl.Type.Etype
@@ -804,7 +840,7 @@ func evconst(n *Node) {
 	if nr.Type == nil {
 		return
 	}
-	if consttype(nr) < 0 {
+	if consttype(nr) == 0 {
 		return
 	}
 	wr = nr.Type.Etype
@@ -815,6 +851,9 @@ func evconst(n *Node) {
 	// check for compatible general types (numeric, string, etc)
 	if wl != wr {
 		if wl == TINTER || wr == TINTER {
+			if n.Op == ONE {
+				goto settrue
+			}
 			goto setfalse
 		}
 		goto illegal
@@ -998,14 +1037,12 @@ func evconst(n *Node) {
 		cmplxmpy(v.U.(*Mpcplx), rv.U.(*Mpcplx))
 
 	case ODIV_ | CTCPLX_:
-		if rv.U.(*Mpcplx).Real.CmpFloat64(0) == 0 && rv.U.(*Mpcplx).Imag.CmpFloat64(0) == 0 {
+		if !cmplxdiv(v.U.(*Mpcplx), rv.U.(*Mpcplx)) {
 			yyerror("complex division by zero")
 			rv.U.(*Mpcplx).Real.SetFloat64(1.0)
 			rv.U.(*Mpcplx).Imag.SetFloat64(0.0)
 			break
 		}
-
-		cmplxdiv(v.U.(*Mpcplx), rv.U.(*Mpcplx))
 
 	case OEQ_ | CTNIL_:
 		goto settrue
@@ -1157,8 +1194,6 @@ func evconst(n *Node) {
 		}
 		goto setfalse
 	}
-
-	goto ret
 
 ret:
 	norig = saveorig(n)
@@ -1338,7 +1373,8 @@ func defaultlitreuse(n *Node, t *types.Type, reuse canReuseNode) *Node {
 			return convlit(n, t)
 		}
 
-		if n.Val().Ctype() == CTNIL {
+		switch n.Val().Ctype() {
+		case CTNIL:
 			lineno = lno
 			if !n.Diag() {
 				yyerror("use of untyped nil")
@@ -1346,16 +1382,12 @@ func defaultlitreuse(n *Node, t *types.Type, reuse canReuseNode) *Node {
 			}
 
 			n.Type = nil
-			break
-		}
-
-		if n.Val().Ctype() == CTSTR {
+		case CTSTR:
 			t1 := types.Types[TSTRING]
 			n = convlit1(n, t1, false, reuse)
-			break
+		default:
+			yyerror("defaultlit: unknown literal: %v", n)
 		}
-
-		yyerror("defaultlit: unknown literal: %v", n)
 
 	case CTxxx:
 		Fatalf("defaultlit: idealkind is CTxxx: %+v", n)
@@ -1552,7 +1584,11 @@ func cmplxmpy(v *Mpcplx, rv *Mpcplx) {
 
 // complex divide v /= rv
 //	(a, b) / (c, d) = ((a*c + b*d), (b*c - a*d))/(c*c + d*d)
-func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
+func cmplxdiv(v *Mpcplx, rv *Mpcplx) bool {
+	if rv.Real.CmpFloat64(0) == 0 && rv.Imag.CmpFloat64(0) == 0 {
+		return false
+	}
+
 	var ac Mpflt
 	var bd Mpflt
 	var bc Mpflt
@@ -1560,6 +1596,7 @@ func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
 	var cc_plus_dd Mpflt
 
 	cc_plus_dd.Set(&rv.Real)
+
 	cc_plus_dd.Mul(&rv.Real) // cc
 
 	ac.Set(&rv.Imag)
@@ -1567,6 +1604,14 @@ func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
 	ac.Mul(&rv.Imag) // dd
 
 	cc_plus_dd.Add(&ac) // cc+dd
+
+	// We already checked that c and d are not both zero, but we can't
+	// assume that c²+d² != 0 follows, because for tiny values of c
+	// and/or d c²+d² can underflow to zero.  Check that c²+d² is
+	// nonzero,return if it's not.
+	if cc_plus_dd.CmpFloat64(0) == 0 {
+		return false
+	}
 
 	ac.Set(&v.Real)
 
@@ -1593,6 +1638,8 @@ func cmplxdiv(v *Mpcplx, rv *Mpcplx) {
 
 	v.Imag.Sub(&ad)         // bc-ad
 	v.Imag.Quo(&cc_plus_dd) // (bc+ad)/(cc+dd)
+
+	return true
 }
 
 // Is n a Go language constant (as opposed to a compile-time constant)?

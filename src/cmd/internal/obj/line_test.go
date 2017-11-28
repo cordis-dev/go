@@ -12,11 +12,12 @@ import (
 
 func TestLinkgetlineFromPos(t *testing.T) {
 	ctxt := new(Link)
-	ctxt.Hash = make(map[SymVer]*LSym)
+	ctxt.hash = make(map[string]*LSym)
+	ctxt.statichash = make(map[string]*LSym)
 
 	afile := src.NewFileBase("a.go", "a.go")
 	bfile := src.NewFileBase("b.go", "/foo/bar/b.go")
-	lfile := src.NewLinePragmaBase(src.MakePos(afile, 7, 0), "linedir", 100)
+	lfile := src.NewLinePragmaBase(src.MakePos(afile, 7, 0), "linedir", "linedir", 100)
 
 	var tests = []struct {
 		pos  src.Pos
